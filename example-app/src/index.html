@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Background transfer example</title>
+    <meta name="viewport" content="viewport-fit=cover, width=device-width, initial-scale=1.0" />
+    <style>
+      body { font: 14px/1.4 -apple-system, system-ui, sans-serif; margin: 0; padding: calc(env(safe-area-inset-top) + 12px) 12px 12px; }
+      label { display: block; margin-top: 8px; }
+      input { width: 100%; box-sizing: border-box; font: inherit; padding: 6px; }
+      button { margin: 8px 6px 0 0; font: inherit; padding: 6px 10px; }
+      pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; background: #f4f4f4; padding: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Background transfer</h1>
+    <div id="available"></div>
+    <label>URL (a resumable upload session URL to upload to, or a file URL to download)
+      <input id="url" type="url" autocomplete="off" />
+    </label>
+    <label>File name in the app's data directory
+      <input id="name" value="example.bin" autocomplete="off" />
+    </label>
+    <button id="upload">Upload</button>
+    <button id="download">Download</button>
+    <button id="cancel">Cancel</button>
+    <button id="list">List</button>
+    <button id="forget">Forget ended</button>
+    <h2>Transfers</h2>
+    <pre id="transfers"></pre>
+    <h2>Events</h2>
+    <pre id="log"></pre>
+    <script src="./js/example.js" type="module"></script>
+  </body>
+</html>

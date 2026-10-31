@@ -1,0 +1,6 @@
+{
+  "appId": "io.github.sandman92.backgroundtransfer.example",
+  "appName": "Background Transfer",
+  "webDir": "dist",
+  "android": { "allowMixedContent": true }
+}
