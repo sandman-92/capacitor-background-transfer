@@ -1,0 +1,92 @@
+{
+  "name": "capacitor-background-transfer",
+  "version": "0.1.0",
+  "description": "Background uploads and downloads for Capacitor: resumable uploads to Google Cloud Storage and Firebase Storage sessions, and resumable downloads, that keep going with the app in the background or closed",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "unpkg": "dist/plugin.js",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "dist/",
+    "ios/Sources",
+    "Package.swift",
+    "CapacitorBackgroundTransfer.podspec"
+  ],
+  "author": "sandman-92",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sandman-92/capacitor-background-transfer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sandman-92/capacitor-background-transfer/issues"
+  },
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "native",
+    "background",
+    "upload",
+    "download",
+    "resumable",
+    "firebase-storage",
+    "google-cloud-storage"
+  ],
+  "scripts": {
+    "verify": "npm run typecheck && npm test && npm run build && npm run test:android && npm run test:ios",
+    "verify:ios": "xcodebuild -scheme CapacitorBackgroundTransfer -destination generic/platform=iOS -scmProvider system",
+    "verify:android": "cd android && ./gradlew clean build test && cd ..",
+    "verify:web": "npm run build",
+    "lint": "npm run eslint && npm run prettier -- --check && npm run swiftlint -- lint",
+    "fmt": "npm run eslint -- --fix && npm run prettier -- --write && npm run swiftlint -- --fix --format",
+    "eslint": "eslint . --ext ts",
+    "prettier": "prettier \"**/*.{css,html,ts,js,java}\" --plugin=prettier-plugin-java",
+    "swiftlint": "node-swiftlint",
+    "docgen": "docgen --api BackgroundTransferPlugin --output-readme README.md --output-json dist/docs.json",
+    "build": "npm run clean && npm run docgen && tsc && rollup -c rollup.config.mjs",
+    "clean": "rimraf ./dist",
+    "watch": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "test:android": "cd android && ./gradlew test && cd ..",
+    "test:ios": "swift test --disable-keychain --package-path ios/CoreTests"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/docgen": "^0.3.0",
+    "@capacitor/ios": "^7.0.0",
+    "@ionic/eslint-config": "^0.4.0",
+    "@ionic/prettier-config": "^4.0.0",
+    "@ionic/swiftlint-config": "^2.0.0",
+    "@types/node": "^22.20.5",
+    "eslint": "^8.57.0",
+    "prettier": "^3.4.2",
+    "prettier-plugin-java": "^2.6.6",
+    "rimraf": "^6.0.1",
+    "rollup": "^4.30.1",
+    "swiftlint": "^2.0.0",
+    "typescript": "~5.7.2",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=7.0.0"
+  },
+  "prettier": "@ionic/prettier-config",
+  "swiftlint": "@ionic/swiftlint-config",
+  "eslintConfig": {
+    "extends": "@ionic/eslint-config/recommended"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  },
+  "homepage": "https://github.com/sandman-92/capacitor-background-transfer#readme"
+}
