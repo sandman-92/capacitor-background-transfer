@@ -50,7 +50,8 @@ function serversTestCount() {
 let ok = false;
 try {
   ok = run('docker', [...compose, 'up', '-d', '--wait']);
-  if (ok) ok = run('./gradlew', ['testDebugUnitTest'], path.join(root, 'android'));
+  // Always rerun: the servers are outside Gradle's view, so its earlier results prove nothing here.
+  if (ok) ok = run('./gradlew', ['testDebugUnitTest', '--rerun'], path.join(root, 'android'));
   console.log(`JUnit: ${serversTestCount()}`);
   if (ok && process.platform === 'darwin')
     ok = run('swift', ['test', '--disable-keychain', '--package-path', 'ios/CoreTests']);

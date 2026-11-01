@@ -211,26 +211,52 @@ public enum PartsUpload {
         return partSize(e) == partSize(wanted) && e.total == fileSize
     }
 
-    /// What a task's end means once the app has asked to cancel the upload.
+    /// What a task's end means once the app has asked to cancel the transfer.
     public enum AfterCancel: Equatable {
-        /// No cancel asked for: as usual.
+        /// As if no cancel had been asked for.
         case asUsual
-        /// The upload is cancelled: clean up and report `cancelled`.
+        /// The transfer is cancelled: clean up and report `cancelled`.
         case cancelled
         /// A part stored after the cancel: nothing more is sent; the other tasks' ends report it.
         case ignore
+        /// The commit was answered: finished if the server confirms the object, cancelled otherwise.
+        case confirmOrCancel
     }
 
-    /// A task of an upload the app asked to cancel has ended. Only a task cancelled (by the
-    /// app's request) reads as the cancel; a part that landed anyway starts nothing more, and
-    /// cancels the upload if it was the last task out; a commit's answer still decides (the
-    /// server may have created the object); any other error is reported as it is.
-    public static func afterCancel(requested: Bool, isCommit: Bool, cancelledError: Bool, otherError: Bool,
+    /// A task of a transfer the app asked to cancel has ended.
+    ///
+    /// - Upload in parts (`inParts`): a part's error of any kind is the cancel (the user asked to
+    ///   stop); a part that landed anyway starts nothing more, and reports the cancel if it was the
+    ///   last task out. The commit isn't cancelled (its body may already be in): its answer decides,
+    ///   and an error ending it is the cancel, with `committing` kept so a restart reports
+    ///   `session-closed`.
+    /// - Anything else (one task): only a task that ended cancelled reads as the cancel; any
+    ///   other end is handled as usual, so an object the server took is still finished.
+    public static func afterCancel(requested: Bool, inParts: Bool, isCommit: Bool, cancelledError: Bool, otherError: Bool,
                                    othersInFlight: Bool) -> AfterCancel {
         guard requested else { return .asUsual }
-        if cancelledError { return .cancelled }
-        if otherError || isCommit { return .asUsual }
+        guard inParts else { return cancelledError ? .cancelled : .asUsual }
+        if cancelledError || otherError { return .cancelled }
+        if isCommit { return .confirmOrCancel }
         return othersInFlight ? .ignore : .cancelled
+    }
+
+    /// What `cancel()` does with the tasks the session still has for a transfer.
+    public enum CancelPlan: Equatable {
+        /// Cancel these tasks; their ends report it.
+        case cancelTasks
+        /// Leave the commit out: its end decides.
+        case awaitCommit
+        /// A task has ended but its end isn't delivered yet: that end reports it.
+        case awaitEnd
+        /// No task is left: report it cancelled now.
+        case markCancelled
+    }
+
+    public static func cancelPlan(commitOut: Bool, unfinishedTasks: Int, endedTasks: Int) -> CancelPlan {
+        if commitOut { return .awaitCommit }
+        if unfinishedTasks > 0 { return .cancelTasks }
+        return endedTasks > 0 ? .awaitEnd : .markCancelled
     }
 
     /// After part `n`'s answer. Nil: it is stored, and recorded in `r.parts`.

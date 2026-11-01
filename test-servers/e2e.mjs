@@ -365,6 +365,71 @@ const cases = {
     return `${sent} part requests reached the server before the cancel took`;
   },
 
+  /**
+   * cancel() while the commit is out (iOS and Android): the commit isn't cancelled. Answered and
+   * confirmed, the upload is finished; its answer lost, it is cancelled and a restart reports
+   * session-closed. For put, cancel() part-way: cancelled, nothing stored.
+   */
+  async cancelCommit(protocol) {
+    const id = `cc-${protocol}-${Date.now() % 100000}`;
+    const u = await setUp(protocol, id);
+    await launch();
+    await cleanSlate();
+    if (protocol === 'put') {
+      await harness('POST', '/throttle', { bytesPerSecond: 0.5 * MIB });
+      await command('upload', u.options);
+      await waitFor('bytes to move', async () => (await events(id, 'progress')).some((p) => p.bytes > MIB / 2));
+      await command('cancel', { id, direction: 'upload' });
+      const r = await waitState(id, ['cancelled', 'finished', 'failed', 'interrupted'], 60000);
+      assert(r.state === 'cancelled', `cancelled (was ${r.state} ${r.reason || ''})`);
+      await harness('POST', '/throttle', { bytesPerSecond: 0 });
+      await sleep(5000);
+      assert((await record(id)).state === 'cancelled', 'still cancelled');
+      assert(!(await stored(u)).exists, 'nothing is stored');
+      return;
+    }
+    const isCommit = (q) =>
+      protocol === 's3-multipart' ? q.method === 'POST' : q.comp === 'blocklist' && q.method === 'PUT';
+    const commitAnswered = async () =>
+      (await harness('GET', `/requests?target=${u.target}`)).requests.some((q) => isCommit(q) && q.status !== null);
+    // 1. Answered and confirmed after the cancel: finished.
+    await harness('POST', '/faults', commitFault(protocol, { action: 'delay-answer', delayMs: 8000 }));
+    await command('upload', u.options);
+    await waitFor('the commit to reach the server', commitAnswered, 90000, 300);
+    await command('cancel', { id, direction: 'upload' });
+    const first = await waitState(id, ['cancelled', 'finished', 'failed', 'interrupted'], 60000);
+    assert(
+      first.state === 'finished',
+      `finished: the server confirmed the commit (was ${first.state} ${first.reason || ''})`,
+    );
+    await assertStored(u);
+    // 2. Its answer lost after the cancel: cancelled, and a restart says session-closed.
+    const id2 = `${id}-lost`;
+    const v = await setUp(protocol, id2);
+    await harness('POST', '/reset', {});
+    await harness('POST', '/faults', commitFault(protocol, { action: 'drop-answer', delayMs: 8000 }));
+    await command('upload', v.options);
+    v.target = u.target;
+    await waitFor(
+      'the commit to reach the server',
+      async () =>
+        (await harness('GET', `/requests?target=${v.target}`)).requests.some((q) => isCommit(q) && q.status !== null),
+      90000,
+      300,
+    );
+    await command('cancel', { id: id2, direction: 'upload' });
+    const second = await waitState(id2, ['cancelled', 'finished', 'failed', 'interrupted'], 60000);
+    assert(second.state === 'cancelled', `cancelled (was ${second.state} ${second.reason || ''})`);
+    await assertStored(v);
+    await command('upload', v.options);
+    const again = await waitState(id2, ['failed', 'finished'], 60000);
+    assert(
+      again.state === 'failed' && again.reason === 'session-closed',
+      `a restart reports session-closed (was ${again.state} ${again.reason})`,
+    );
+    assert(device.remainders().length === 0, 'no temporary copies are left');
+  },
+
   /** Criteria 1 and 6: the app sent to the background part-way and its process killed. */
   async killed(protocol) {
     const id = `killed-${protocol}-${Date.now() % 100000}`;

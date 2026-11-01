@@ -9,10 +9,15 @@ name: background-transfer-test-servers
 
 services:
   minio:
-    # MinIO's own images are no longer published; Chainguard builds it from source. Pinned by
-    # digest (MinIO RELEASE.2026-10-23T20-06-51Z); bump it deliberately.
-    image: cgr.dev/chainguard/minio@sha256:0a01100085e30fb08d2f39e39c9f5c9d83a95707f220b007d813b690cd41622d
-    # Objects go to the container's own disk, not memory; `docker compose down` discards them.
+    # MinIO no longer publishes images or binaries, so it is built here from its own repository at
+    # a pinned release (minio.Dockerfile), the same one CI's macOS job builds. The first
+    # `up` takes a few minutes for the build.
+    build:
+      context: .
+      dockerfile: minio.Dockerfile
+      args:
+        MINIO_RELEASE: RELEASE.2025-10-15T17-29-55Z
+    image: background-transfer-minio:RELEASE.2025-10-15T17-29-55Z
     command: server /data --quiet
     environment:
       MINIO_ROOT_USER: minioadmin

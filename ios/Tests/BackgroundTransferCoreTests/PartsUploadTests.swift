@@ -189,17 +189,36 @@ final class PartsUploadTests: XCTestCase {
         XCTAssertNil(r.js["partTasks"])
     }
 
-    func testOnlyACancelledTaskReadsAsTheAppsCancel() {
+    func testWhatATasksEndMeansOnceTheAppHasAskedToCancel() {
         typealias A = PartsUpload.AfterCancel
-        func after(_ requested: Bool, commit: Bool = false, cancelled: Bool = false, other: Bool = false, others: Bool = false) -> A {
-            PartsUpload.afterCancel(requested: requested, isCommit: commit, cancelledError: cancelled, otherError: other, othersInFlight: others)
+        func parts(_ requested: Bool = true, commit: Bool = false, cancelled: Bool = false, other: Bool = false, others: Bool = false) -> A {
+            PartsUpload.afterCancel(requested: requested, inParts: true, isCommit: commit, cancelledError: cancelled, otherError: other,
+                                    othersInFlight: others)
         }
-        XCTAssertEqual(after(false, cancelled: true), .asUsual, "a cancel nobody asked for is the system's")
-        XCTAssertEqual(after(true, cancelled: true, others: true), .cancelled)
-        XCTAssertEqual(after(true, others: true), .ignore, "a part that landed anyway starts nothing more")
-        XCTAssertEqual(after(true, others: false), .cancelled, "the last task out reports the cancel")
-        XCTAssertEqual(after(true, commit: true), .asUsual, "a commit's answer still decides")
-        XCTAssertEqual(after(true, other: true, others: true), .asUsual, "a refusal is reported as it is")
+        XCTAssertEqual(parts(false, cancelled: true), .asUsual, "a cancel nobody asked for is the system's")
+        XCTAssertEqual(parts(cancelled: true, others: true), .cancelled)
+        XCTAssertEqual(parts(other: true, others: true), .cancelled, "a dropped part after the cancel is the cancel too")
+        XCTAssertEqual(parts(others: true), .ignore, "a part that landed anyway starts nothing more")
+        XCTAssertEqual(parts(others: false), .cancelled, "the last task out reports the cancel")
+        XCTAssertEqual(parts(commit: true), .confirmOrCancel, "an answered commit decides")
+        XCTAssertEqual(parts(commit: true, cancelled: true), .cancelled)
+        XCTAssertEqual(parts(commit: true, other: true), .cancelled, "a commit cut off after the cancel is the cancel")
+
+        func single(_ requested: Bool = true, cancelled: Bool = false, other: Bool = false) -> A {
+            PartsUpload.afterCancel(requested: requested, inParts: false, isCommit: false, cancelledError: cancelled, otherError: other,
+                                    othersInFlight: false)
+        }
+        XCTAssertEqual(single(cancelled: true), .cancelled)
+        XCTAssertEqual(single(), .asUsual, "put and firebase-resumable: an object the server took is still finished")
+        XCTAssertEqual(single(other: true), .asUsual, "and an error is what it is")
+        XCTAssertEqual(single(false, cancelled: true), .asUsual)
+    }
+
+    func testCancelLeavesTheCommitOutAndWaitsForAnEndAlreadyOnItsWay() {
+        XCTAssertEqual(PartsUpload.cancelPlan(commitOut: true, unfinishedTasks: 1, endedTasks: 0), .awaitCommit)
+        XCTAssertEqual(PartsUpload.cancelPlan(commitOut: false, unfinishedTasks: 2, endedTasks: 1), .cancelTasks)
+        XCTAssertEqual(PartsUpload.cancelPlan(commitOut: false, unfinishedTasks: 0, endedTasks: 1), .awaitEnd)
+        XCTAssertEqual(PartsUpload.cancelPlan(commitOut: false, unfinishedTasks: 0, endedTasks: 0), .markCancelled)
     }
 
     func testPartsCarryOverOnlyForTheSameRanges() {

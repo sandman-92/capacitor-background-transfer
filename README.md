@@ -195,9 +195,10 @@ await BackgroundTransfer.upload({
   (default 8 MiB; at least 5 MiB when there is more than one part, at most 5 GiB), `listPartsUrl`
   (optional). On Android and iOS `upload()` also checks `partUrls` against the file's size.
 - **Resuming:** a restarted upload carries over what it sent only when its URL, part size and
-  file size are the same as before. With `listPartsUrl`, a resumed upload asks S3 which parts it holds and sends the
-  rest, so you can also presign fresh URLs for the same `UploadId` and carry on where expired ones
-  stopped. Without it, the plugin trusts its own record of the parts it sent.
+  file size are the same as before. With `listPartsUrl`, a resumed upload asks S3 which parts it
+  holds and sends the rest, so you can also presign fresh URLs for the same `UploadId` and carry
+  on where expired ones stopped. Without it, the plugin trusts its own record of the parts it
+  sent.
 - **Completion:** finished only when S3 answers `CompleteMultipartUpload` with the completed
   object (S3 can answer 200 with an error, which is not taken as success). If the completion's
   answer is lost, starting the upload again reports `session-closed`: check the object (e.g.
@@ -218,8 +219,9 @@ await BackgroundTransfer.upload({
   come back in; in the background it waits for one more wake (about a minute on the iOS 27
   simulator: 11 MiB in three parts was stored about 70 s after the app left the screen). A
   refused or dropped part, or `cancel()`, stops the others and removes their copies; once
-  `cancel()` is called nothing more is sent, and the upload is reported `cancelled` unless a
-  commit already out is confirmed by the server.
+  `cancel()` is called nothing more is sent. A commit already out is left to finish: the upload
+  is `finished` if the server confirms the object, and `cancelled` otherwise (then, since the
+  commit may have been applied, starting it again reports `session-closed`).
 - **iOS disk:** a background session can only send whole files, so each part is sent from a
   temporary copy of its byte range, deleted when its task ends. On screen that is about one part
   (8 MiB by default) of extra disk at a time; once the app leaves the screen, copies of everything
@@ -637,15 +639,17 @@ Why a transfer stopped without finishing.
 npm install
 npm run build           # TypeScript, the API section of this README, rollup bundles
 npm test                # Vitest: option checks, the web implementation
-npm run test:android    # JUnit: chunking, offsets, Range, retries, the queue (needs JDK 21 and the Android SDK)
+npm run test:android    # JUnit: chunking, offsets, Range, retries, the queue (JDK 21, Android SDK)
 npm run test:ios        # XCTest on macOS: remainder copies, part files, upload outcomes
 npm run verify          # all of the above
-npm run test:servers    # starts MinIO and Azurite in Docker, runs the JUnit and XCTest suites against them, stops them
+npm run test:servers    # MinIO and Azurite in Docker; the JUnit and XCTest suites against them
 ```
 
 ### Local storage servers
 
-`test-servers/` holds a Docker Compose file running MinIO (S3) and Azurite (Azure Blob) with their
+`test-servers/` holds a Docker Compose file running MinIO (S3, release
+`RELEASE.2025-10-15T17-29-55Z`, built from its repository by `minio.Dockerfile` since MinIO no
+longer publishes images; the first start builds it) and Azurite (Azure Blob, 3.37.0) with their
 well-known development credentials (`minioadmin`/`minioadmin`, and Azurite's `devstoreaccount1`),
 and a small harness in front of them (`harness.mjs`, Node's standard library only). Its control
 API on port 8790 creates multipart uploads, presigns part URLs and SAS URLs, checks what the
@@ -658,8 +662,8 @@ pinned, and their ports published on `127.0.0.1` only.
 (`ANDROID_HOME`, or `sdk.dir` in `android/local.properties`), and on macOS Swift; it refuses to
 start without them. It reruns the JUnit suite even when Gradle holds results from a run without
 the servers, and says how many of `ServersTest`'s cases ran. In CI the JUnit suite runs against
-the compose servers on Linux; the Swift suite runs on macOS, which has no Docker, against MinIO
-built from its repository at a pinned release, Azurite from npm and the harness.
+the compose servers on Linux; the Swift suite runs on macOS, which has no Docker, against the
+same MinIO release built from its repository, Azurite 3.37.0 from npm and the harness.
 
 ```bash
 npm run servers:up      # start them (docker compose up --wait)
@@ -688,7 +692,8 @@ commit, and checks the stored objects and what the app reports.
 `ios/Sources/BackgroundTransferCore` and `ios/Tests/BackgroundTransferCoreTests`, because
 Capacitor's Swift package only ships iOS binaries. The Android tests run the uploader and
 downloader against a local MockWebServer. `example-app/` is a small app for trying the plugin by
-hand; see its README. The upload protocols' tests against real servers are described above, under [Local storage servers](#local-storage-servers).
+hand; see its README. The upload protocols' tests against real servers are described above,
+under [Local storage servers](#local-storage-servers).
 
 Things only a real device can show: locking an iPhone mid-transfer, Low Power Mode, an Android
 restart part-way through (the job is persisted), and makers' own battery managers.

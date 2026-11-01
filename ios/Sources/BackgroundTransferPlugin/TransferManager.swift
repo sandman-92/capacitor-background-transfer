@@ -215,13 +215,19 @@ final class TransferManager: NSObject {
                 let session = r.direction == .upload ? self.uploadSession : self.downloadSession
                 session.getAllTasks { tasks in
                     self.queue.async {
+                        guard var now = self.store.get(key: key), now.isActive else { return }
                         // Every task of the transfer: an upload in parts may have several handed over.
-                        let mine = tasks.filter { $0.taskDescription == key && $0.state != .completed }
-                        if mine.isEmpty {
-                            guard var now = self.store.get(key: key), now.isActive else { return }
+                        let mine = tasks.filter { $0.taskDescription == key }
+                        let unfinished = mine.filter { $0.state != .completed }
+                        let commitOut = UploadProtocol.resolve(now.protocol)?.inParts == true && now.currentPart == 0
+                        switch PartsUpload.cancelPlan(commitOut: commitOut, unfinishedTasks: unfinished.count,
+                                                      endedTasks: mine.count - unfinished.count) {
+                        case .cancelTasks:
+                            unfinished.forEach { $0.cancel() }
+                        case .awaitCommit, .awaitEnd:
+                            break // That task's end decides, with the cancel noted.
+                        case .markCancelled:
                             self.markCancelled(&now)
-                        } else {
-                            mine.forEach { $0.cancel() }
                         }
                     }
                 }
@@ -743,6 +749,8 @@ final class TransferManager: NSObject {
     private func completed(_ task: URLSessionTask, error: Error?) {
         let body = uploadBodies.removeValue(forKey: task.taskIdentifier)
         guard let key = task.taskDescription, var r = store.get(key: key) else { return }
+        // Once finished, failed or cancelled, a transfer has said its last word: one final state each.
+        if r.state == .finished || r.state == .failed || r.state == .cancelled { return }
         // An upload in parts: which part the task carried (none: cancelled with the others, or older).
         var part = -1
         if r.direction == .upload, UploadProtocol.resolve(r.protocol)?.inParts == true {
@@ -763,16 +771,18 @@ final class TransferManager: NSObject {
             if part <= 0 { removeRemainder(&r) }
             let ns = error as NSError?
             let cancelledError = ns?.domain == NSURLErrorDomain && ns?.code == NSURLErrorCancelled
-            switch PartsUpload.afterCancel(requested: byUs, isCommit: part == 0, cancelledError: cancelledError,
+            switch PartsUpload.afterCancel(requested: byUs, inParts: UploadProtocol.resolve(r.protocol)?.inParts == true,
+                                           isCommit: part == 0, cancelledError: cancelledError,
                                            otherError: ns != nil && !cancelledError, othersInFlight: r.partTasks != nil) {
             case .cancelled:
+                // `committing` stays as it was: a commit cut off may have been applied.
                 markCancelled(&r)
                 return
             case .ignore:
                 store.put(r) // A part landed after the cancel: nothing more goes; the others' ends report it.
                 return
-            case .asUsual:
-                break
+            case .asUsual, .confirmOrCancel:
+                break // An answered commit is decided in `answered`: finished only if confirmed.
             }
             if let error = ns {
                 let (reason, resumable) = Reason.forError(error, cancelledByUs: byUs)

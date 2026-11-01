@@ -224,16 +224,20 @@ function proxy(target, upstream) {
     up.on('response', (answer) => {
       answered = true;
       entry.status = answer.statusCode;
+      // `delayMs` on a fault holds the server's answer that long before it is passed on (or dropped).
+      const later = (fn) => (fault?.delayMs ? setTimeout(fn, fault.delayMs) : fn());
       if (fault?.action === 'drop-answer') {
         // The server did the work; its answer never reaches the client.
         answer.resume();
-        answer.on('end', () => kill('drop-answer'));
+        answer.on('end', () => later(() => kill('drop-answer')));
         return;
       }
-      const reply = () => {
-        res.writeHead(answer.statusCode, answer.headers);
-        answer.pipe(res);
-      };
+      if (fault?.action === 'delay-answer') entry.fault = `answer held ${fault.delayMs} ms`;
+      const reply = () =>
+        later(() => {
+          res.writeHead(answer.statusCode, answer.headers);
+          answer.pipe(res);
+        });
       // An answer that comes before the body is in waits for the rest of it, unless the client
       // asked to hear it first (`Expect: 100-continue`). Closing on a client still sending, as
       // some servers do, leaves the Android emulator's network stack waiting forever.
@@ -379,6 +383,7 @@ const routes = {
    * letting `skip` matches through, `times` times: `cut` the connection after `after` body bytes,
    * answer `status` instead of forwarding (with an error body; 200 gives S3's 200-with-an-error),
    * or `drop-answer`: forward the request, then close the connection without its answer.
+   * `delay-answer` (or `delayMs` on `drop-answer`) holds the server's answer `delayMs` first.
    */
   'POST /faults': async (req, body) => {
     for (const f of Array.isArray(body) ? body : [body]) faults.push({ times: 1, ...f });
