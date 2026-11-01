@@ -11,18 +11,17 @@ services:
   minio:
     # MinIO's own images are no longer published; Chainguard builds it from source.
     image: cgr.dev/chainguard/minio:latest
+    # Objects go to the container's own disk, not memory; `docker compose down` discards them.
     command: server /data --quiet
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
-    tmpfs:
-      - /data
     mem_limit: 512m
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest
-    command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --inMemoryPersistence --skipApiVersionCheck --loose
-    mem_limit: 384m
+    command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --location /data --skipApiVersionCheck --loose
+    mem_limit: 512m
 
   harness:
     image: node:22-alpine

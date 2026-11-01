@@ -95,6 +95,10 @@ public class BackgroundTransferPlugin extends Plugin implements Runner.Events {
             return;
         }
         TransferRecord r = new TransferRecord();
+        r.id = id;
+        r.direction = direction;
+        r.url = url;
+        r.path = path;
         if (TransferRecord.UPLOAD.equals(direction)) {
             String protocol = UploadAdapters.resolve(call.getString("protocol"));
             if (protocol == null) {
@@ -108,10 +112,6 @@ public class BackgroundTransferPlugin extends Plugin implements Runner.Events {
                 return;
             }
         }
-        r.id = id;
-        r.direction = direction;
-        r.url = url;
-        r.path = path;
         JSObject headers = call.getObject("headers");
         if (headers != null) {
             Iterator<String> names = headers.keys();

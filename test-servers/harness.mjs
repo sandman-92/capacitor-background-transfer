@@ -257,7 +257,8 @@ async function readJson(req) {
   return text ? JSON.parse(text) : {};
 }
 
-const clientHost = (req) => (req.headers.host || 'localhost').replace(/:\d+$/, '');
+/** The host the client reaches the proxies at: `host` in the request body, or the one it called the control port by. */
+const clientHost = (req, body = {}) => body.host || (req.headers.host || 'localhost').replace(/:\d+$/, '');
 
 const routes = {
   /** Healthy once both servers answer. */
@@ -277,7 +278,7 @@ const routes = {
     const created = await s3('POST', key, { uploads: '' });
     const [uploadId] = xmlValues(created.body.toString(), 'UploadId');
     if (created.status !== 200 || !uploadId) throw new Error(`CreateMultipartUpload: HTTP ${created.status} ${created.body}`);
-    const host = `${clientHost(req)}:${S3_PORT}`;
+    const host = `${clientHost(req, body)}:${S3_PORT}`;
     const expires = body.expires ?? 3600;
     return {
       key,
@@ -295,7 +296,7 @@ const routes = {
   'POST /s3/put': async (req, body) => {
     await ensureBucket();
     const key = body.key || unique('put');
-    return { key, url: presign({ method: 'PUT', host: `${clientHost(req)}:${S3_PORT}`, key, expires: body.expires ?? 3600 }) };
+    return { key, url: presign({ method: 'PUT', host: `${clientHost(req, body)}:${S3_PORT}`, key, expires: body.expires ?? 3600 }) };
   },
 
   /** What MinIO holds under `key`, or the parts of an upload still open. */
@@ -314,7 +315,7 @@ const routes = {
     await ensureContainer();
     const name = body.name || unique('blob');
     const sas = blobSas(name, body.permissions ?? 'rcw', body.expires ?? 3600);
-    return { name, url: `http://${clientHost(req)}:${AZURE_PORT}/${AZURE.account}/${AZURE.container}/${name}?${sas}` };
+    return { name, url: `http://${clientHost(req, body)}:${AZURE_PORT}/${AZURE.account}/${AZURE.container}/${name}?${sas}` };
   },
   'GET /azure/blob': async (req, body, query) => {
     const r = await azure('GET', `/${query.get('name')}`);

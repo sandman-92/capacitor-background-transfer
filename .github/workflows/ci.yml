@@ -32,5 +32,43 @@ jobs:
         run: npm run test:android
       - name: iOS core tests
         run: npm run test:ios
+      # macOS runners have no Docker, so the Swift tests' servers run natively here: MinIO from
+      # Homebrew, Azurite from npm, and the harness in front of them, on the compose file's ports.
+      - name: Start MinIO, Azurite and the harness
+        run: |
+          brew install minio
+          mkdir -p "$RUNNER_TEMP/minio" "$RUNNER_TEMP/azurite"
+          MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin nohup minio server "$RUNNER_TEMP/minio" --address 127.0.0.1:9000 > "$RUNNER_TEMP/minio.log" 2>&1 &
+          nohup npx --yes azurite@3 azurite-blob --blobHost 127.0.0.1 --blobPort 10000 --location "$RUNNER_TEMP/azurite" --skipApiVersionCheck --loose > "$RUNNER_TEMP/azurite.log" 2>&1 &
+          S3_UPSTREAM=http://127.0.0.1:9000 AZURE_UPSTREAM=http://127.0.0.1:10000 nohup node test-servers/harness.mjs > "$RUNNER_TEMP/harness.log" 2>&1 &
+          for i in $(seq 1 60); do curl -fs http://localhost:8790/health && break; sleep 2; done
+          curl -fs http://localhost:8790/health
+      - name: iOS core tests against the servers
+        env:
+          BT_HARNESS: http://localhost:8790
+        run: npm run test:ios
       - name: iOS build
         run: npm run verify:ios
+
+  servers-jvm:
+    name: Android tests against MinIO and Azurite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: ${{ env.JAVA_VERSION }}
+      - run: npm ci
+      - name: Start the servers
+        run: npm run servers:up
+      - name: JUnit against the servers
+        env:
+          BT_HARNESS: http://localhost:8790
+        run: npm run test:android
+      - name: Stop the servers
+        if: always()
+        run: npm run servers:down
