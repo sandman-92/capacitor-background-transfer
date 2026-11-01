@@ -4,9 +4,10 @@
 
 First version.
 
-- `upload()` to an existing Google Cloud Storage or Firebase Storage resumable upload session:
+- `upload()` to an existing Firebase Storage resumable upload (the `X-Goog-Upload` protocol):
   asks for the offset, sends the rest, finalizes. No `Authorization` header unless passed in
-  `headers`.
+  `headers`. A `protocol` option (`firebase-resumable`, the default and only value) leaves room
+  for other protocols; unknown values are refused on every platform.
 - `download()` to `<path>.part`, renamed into place only when whole; resumes with `Range`.
 - Android 14+: a user-initiated data transfer job per direction. Android 6 to 13: a WorkManager
   `dataSync` foreground-service worker. iOS: background `URLSession`s, with a temporary copy of

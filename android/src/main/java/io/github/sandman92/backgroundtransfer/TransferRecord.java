@@ -23,6 +23,8 @@ public final class TransferRecord {
     public String state;
     public String url;
     public String path;
+    /** Uploads: the protocol the session speaks ({@link UploadAdapters}). */
+    public String protocol = UploadAdapters.DEFAULT;
     public long bytes;
     public long total = -1;
     public String reason;
@@ -64,6 +66,7 @@ public final class TransferRecord {
         o.put("state", state);
         o.put("url", url);
         o.put("path", path);
+        if (UPLOAD.equals(direction)) o.put("protocol", protocol);
         o.put("bytes", bytes);
         o.put("total", total);
         if (reason != null) o.put("reason", reason);
@@ -93,6 +96,7 @@ public final class TransferRecord {
         r.state = o.getString("state");
         r.url = o.getString("url");
         r.path = o.getString("path");
+        r.protocol = o.optString("protocol", UploadAdapters.DEFAULT);
         r.bytes = o.optLong("bytes", 0);
         r.total = o.optLong("total", -1);
         r.reason = o.has("reason") ? o.getString("reason") : null;

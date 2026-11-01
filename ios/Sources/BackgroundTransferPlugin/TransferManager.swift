@@ -200,6 +200,14 @@ final class TransferManager: NSObject {
 
     private func startUpload(_ record: TransferRecord) {
         var r = record
+        // Where another protocol's adapter would plug in.
+        switch UploadProtocol.resolve(r.protocol) {
+        case .firebaseResumable:
+            break
+        case nil:
+            fail(&r, Reason.unknown, "unknown upload protocol \(r.protocol ?? "")")
+            return
+        }
         let file = URL(fileURLWithPath: r.path)
         let size: Int64
         do {

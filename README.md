@@ -4,10 +4,11 @@ Background uploads and downloads for Capacitor 7 on Android and iOS. A transfer 
 while the phone is locked or the app is in the background or closed, and picks up where it
 stopped after a dropped connection.
 
-- **Upload** to a resumable upload session of Google Cloud Storage or Firebase Storage (the
-  `X-Goog-Upload-*` protocol) that your app has already started. The plugin asks the session how
-  many bytes it holds and sends the rest. It sends no `Authorization` header unless you pass one
-  in `headers`.
+- **Upload** to a Firebase Storage resumable upload (the `X-Goog-Upload` protocol) that your
+  app has already started. The plugin asks the session how many bytes it holds and sends the
+  rest. It sends no `Authorization` header unless you pass one in `headers`. The `protocol`
+  option names the protocol, so others can be added later; `firebase-resumable` is the only one
+  and the default.
 - **Download** any URL to a file. Bytes go to `<path>.part`, which is renamed to `<path>` only
   once every byte has landed, and an interrupted download resumes with a `Range` request.
 - **Both**: one transfer per direction at a time, the rest queued; progress and state events
@@ -80,11 +81,12 @@ await BackgroundTransfer.addListener('progress', ({ transfer }) => {
   // transfer.bytes of transfer.total
 });
 
-// Start the resumable upload session yourself (it is where your credentials go), then hand
-// its URL to the plugin.
+// Start the Firebase Storage resumable upload yourself (it is where your credentials go), then
+// hand its session URL to the plugin.
 await BackgroundTransfer.upload({
   id: 'clip-42',
   url: sessionUrl, // the X-Goog-Upload-URL from the session's start
+  protocol: 'firebase-resumable', // the default; any other value is refused
   path: fileUri, // an absolute path or file:// URI, e.g. from Filesystem.getUri()
   notification: { title: 'Uploading', text: 'clip-42.mp4' }, // Android only
 });
@@ -349,6 +351,7 @@ What the plugin knows about one transfer.
 | **`state`**      | <code><a href="#transferstate">TransferState</a></code>                 |                                                                            |
 | **`url`**        | <code>string</code>                                                     |                                                                            |
 | **`path`**       | <code>string</code>                                                     |                                                                            |
+| **`protocol`**   | <code><a href="#uploadprotocol">UploadProtocol</a></code>               | Uploads: the protocol the session speaks.                                  |
 | **`bytes`**      | <code>number</code>                                                     | Bytes the server holds (upload) or that have landed in `.part` (download). |
 | **`total`**      | <code>number</code>                                                     | Total size, or -1 until it is known.                                       |
 | **`reason`**     | <code><a href="#transferfailurereason">TransferFailureReason</a></code> | Set when `state` is `failed`, `cancelled` or `interrupted`.                |
@@ -359,9 +362,10 @@ What the plugin knows about one transfer.
 
 #### UploadOptions
 
-| Prop      | Type                | Description                                                                                                                                                                            |
-| --------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`url`** | <code>string</code> | The resumable session URL (`X-Goog-Upload-URL`) of an upload you have already started with the user's token. The plugin asks it how many bytes it holds, sends the rest and finalizes. |
+| Prop           | Type                                                      | Description                                                                                                                                                                                           |
+| -------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`url`**      | <code>string</code>                                       | The session URL of an upload you have already started (for `firebase-resumable`, the `X-Goog-Upload-URL` from its `start`). The plugin asks it how many bytes it holds, sends the rest and finalizes. |
+| **`protocol`** | <code><a href="#uploadprotocol">UploadProtocol</a></code> | The protocol the session speaks. Default `firebase-resumable`. An unknown value is refused.                                                                                                           |
 
 
 #### DownloadOptions
@@ -404,6 +408,19 @@ Where a transfer is.
 - `cancelled`: `cancel()` was called. Its temporary files are gone.
 
 <code>'queued' | 'running' | 'interrupted' | 'finished' | 'failed' | 'cancelled'</code>
+
+
+#### UploadProtocol
+
+The upload protocol a transfer speaks.
+
+- `firebase-resumable`: a Firebase Storage resumable upload (the
+  `X-Goog-Upload-*` protocol: `POST` with `X-Goog-Upload-Command` `query`,
+  `upload` and `upload, finalize`).
+
+The only one so far; others may be added without changing the interface.
+
+<code>'firebase-resumable'</code>
 
 
 #### TransferFailureReason

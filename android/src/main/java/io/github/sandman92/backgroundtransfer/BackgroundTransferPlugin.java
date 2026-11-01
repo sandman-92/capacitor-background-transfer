@@ -92,6 +92,14 @@ public class BackgroundTransferPlugin extends Plugin implements Runner.Events {
             return;
         }
         TransferRecord r = new TransferRecord();
+        if (TransferRecord.UPLOAD.equals(direction)) {
+            String protocol = UploadAdapters.resolve(call.getString("protocol"));
+            if (protocol == null) {
+                call.reject(UploadAdapters.refusal());
+                return;
+            }
+            r.protocol = protocol;
+        }
         r.id = id;
         r.direction = direction;
         r.url = url;

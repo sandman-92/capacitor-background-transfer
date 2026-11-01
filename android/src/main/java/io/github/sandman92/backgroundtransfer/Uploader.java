@@ -19,7 +19,7 @@ import java.util.Map;
  * Plain Java (no Android types), so it runs under JUnit against a local
  * server.
  */
-public final class Uploader {
+public final class Uploader implements UploadAdapter {
 
     /** A multiple of 256 KiB, as the protocol requires for every chunk but the last. */
     public static final int CHUNK = 4 * 1024 * 1024;
@@ -77,6 +77,7 @@ public final class Uploader {
      * server has finalized it. Network errors are retried {@code retries}
      * times from the server's offset before giving up with {@code network}.
      */
+    @Override
     public long run(String url, File file, Map<String, String> headers, Progress progress) throws TransferException {
         int attempt = 0;
         while (true) {

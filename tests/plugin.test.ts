@@ -51,6 +51,39 @@ describe('on the web', () => {
   });
 });
 
+describe('upload protocol', () => {
+  it('defaults to firebase-resumable', async () => {
+    const native = fakeNative();
+    await wrap(native).upload({ id: 'v1', url: 'https://x/u', path: '/v1' });
+    expect(native.upload).toHaveBeenCalledWith({
+      id: 'v1',
+      url: 'https://x/u',
+      path: '/v1',
+      protocol: 'firebase-resumable',
+    });
+  });
+
+  it('passes a known protocol on', async () => {
+    const native = fakeNative();
+    await wrap(native).upload({ id: 'v1', url: 'https://x/u', path: '/v1', protocol: 'firebase-resumable' });
+    expect(native.upload).toHaveBeenCalledWith(expect.objectContaining({ protocol: 'firebase-resumable' }));
+  });
+
+  it('refuses an unknown protocol before the native side sees it', async () => {
+    const native = fakeNative();
+    await expect(
+      wrap(native).upload({ id: 'v1', url: 'https://x/u', path: '/v1', protocol: 's3-multipart' as never }),
+    ).rejects.toThrow('protocol must be one of firebase-resumable');
+    expect(native.upload).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown protocol on the web too', async () => {
+    await expect(
+      BackgroundTransfer.upload({ id: 'v1', url: 'https://x/u', path: '/v1', protocol: 'nope' as never }),
+    ).rejects.toThrow('protocol must be one of firebase-resumable');
+  });
+});
+
 describe('wrap', () => {
   it('checks upload options before the native side sees them', async () => {
     const native = fakeNative();

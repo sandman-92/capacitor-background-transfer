@@ -10,6 +10,8 @@ public struct TransferRecord: Codable, Equatable {
     public var state: State
     public var url: String
     public var path: String
+    /// Uploads: the protocol the session speaks (`UploadProtocol`); nil for a download.
+    public var `protocol`: String?
     public var bytes: Int64 = 0
     public var total: Int64 = -1
     public var reason: String?
@@ -49,6 +51,7 @@ public struct TransferRecord: Codable, Equatable {
             "id": id, "direction": direction.rawValue, "state": state.rawValue, "url": url, "path": path,
             "bytes": bytes, "total": total, "updatedAt": updatedAt,
         ]
+        if let p = `protocol` { o["protocol"] = p }
         if let reason = reason { o["reason"] = reason }
         if let message = message { o["message"] = message }
         if let httpStatus = httpStatus { o["httpStatus"] = httpStatus }

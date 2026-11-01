@@ -65,6 +65,13 @@ public class BackgroundTransferPlugin: CAPPlugin, CAPBridgedPlugin, TransferList
             return
         }
         var record = TransferRecord(id: id, direction: direction, url: url, path: path)
+        if direction == .upload {
+            guard let chosen = UploadProtocol.resolve(call.getString("protocol")) else {
+                call.reject(UploadProtocol.refusal)
+                return
+            }
+            record.protocol = chosen.rawValue
+        }
         if let headers = call.getObject("headers") {
             for (name, value) in headers {
                 if let value = value as? String { record.headers[name] = value }

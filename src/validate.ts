@@ -1,4 +1,5 @@
 import type { DownloadOptions, UploadOptions } from './definitions';
+import { UPLOAD_PROTOCOLS } from './definitions';
 
 /**
  * Checks a transfer's options before they cross to the native side, so both
@@ -21,6 +22,19 @@ export function checkTransferOptions<T extends UploadOptions | DownloadOptions>(
     }
   }
   return { ...options, path: plain };
+}
+
+/**
+ * Checks an upload's options as `checkTransferOptions` does, and its
+ * `protocol`: `firebase-resumable` when omitted, refused when unknown.
+ */
+export function checkUploadOptions(options: UploadOptions): UploadOptions {
+  const checked = checkTransferOptions(options);
+  const protocol = checked.protocol ?? 'firebase-resumable';
+  if (!UPLOAD_PROTOCOLS.includes(protocol)) {
+    throw new Error(`protocol must be one of ${UPLOAD_PROTOCOLS.join(', ')}`);
+  }
+  return { ...checked, protocol };
 }
 
 /** `file:///a/b%20c.mp4` → `/a/b c.mp4`; absolute paths pass through. */

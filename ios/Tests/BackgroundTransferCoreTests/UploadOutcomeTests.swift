@@ -5,7 +5,7 @@ final class UploadOutcomeTests: XCTestCase {
     let total: Int64 = 1000
 
     func testACleanFinalizeOfTheWholeFileIsFinished() {
-        let body = #"{"name":"sessions/x/source","size":"1000"}"#.data(using: .utf8)
+        let body = #"{"name":"uploads/x","size":"1000"}"#.data(using: .utf8)
         XCTAssertEqual(UploadOutcome.afterResponse(status: 200, uploadStatus: "final", received: 1000, body: body, total: total), .finished)
         XCTAssertEqual(UploadOutcome.afterResponse(status: 200, uploadStatus: nil, received: nil, body: nil, total: total), .finished)
     }

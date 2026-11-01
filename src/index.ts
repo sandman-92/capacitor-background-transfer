@@ -1,7 +1,7 @@
 import { registerPlugin } from '@capacitor/core';
 
 import type { BackgroundTransferPlugin } from './definitions';
-import { checkTransferOptions } from './validate';
+import { checkTransferOptions, checkUploadOptions } from './validate';
 
 const Native = registerPlugin<BackgroundTransferPlugin>('BackgroundTransfer', {
   web: () => import('./web').then((m) => new m.BackgroundTransferWeb()),
@@ -16,7 +16,7 @@ const BackgroundTransfer: BackgroundTransferPlugin = wrap(Native);
 export function wrap(plugin: BackgroundTransferPlugin): BackgroundTransferPlugin {
   return {
     isAvailable: () => plugin.isAvailable(),
-    upload: async (options) => plugin.upload(checkTransferOptions(options)),
+    upload: async (options) => plugin.upload(checkUploadOptions(options)),
     download: async (options) => plugin.download(checkTransferOptions(options)),
     cancel: (options) => plugin.cancel(options),
     list: () => plugin.list(),
@@ -28,5 +28,5 @@ export function wrap(plugin: BackgroundTransferPlugin): BackgroundTransferPlugin
 }
 
 export * from './definitions';
-export { checkTransferOptions, toPlainPath } from './validate';
+export { checkTransferOptions, checkUploadOptions, toPlainPath } from './validate';
 export { BackgroundTransfer };

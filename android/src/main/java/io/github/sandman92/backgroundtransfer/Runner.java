@@ -278,7 +278,7 @@ public final class Runner {
         };
         try {
             long total = TransferRecord.UPLOAD.equals(r.direction)
-                ? new Uploader(Uploader.CHUNK, retries, backoffMillis).run(r.url, new File(r.path), r.headers, progress)
+                ? UploadAdapters.forProtocol(r.protocol, retries, backoffMillis).run(r.url, new File(r.path), r.headers, progress)
                 : new Downloader(retries, backoffMillis).run(r.url, new File(r.path), r.headers, progress);
             r.state = TransferRecord.FINISHED;
             r.bytes = total;

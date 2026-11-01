@@ -1,7 +1,7 @@
 {
   "name": "capacitor-background-transfer",
   "version": "0.1.0",
-  "description": "Background uploads and downloads for Capacitor: resumable uploads to Google Cloud Storage and Firebase Storage sessions, and resumable downloads, that keep going with the app in the background or closed",
+  "description": "Background uploads and downloads for Capacitor: Firebase Storage resumable uploads (the X-Goog-Upload protocol) and resumable downloads that keep going with the app in the background or closed",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",
   "types": "dist/esm/index.d.ts",
@@ -31,8 +31,7 @@
     "upload",
     "download",
     "resumable",
-    "firebase-storage",
-    "google-cloud-storage"
+    "firebase-storage"
   ],
   "scripts": {
     "verify": "npm run typecheck && npm test && npm run build && npm run test:android && npm run test:ios",

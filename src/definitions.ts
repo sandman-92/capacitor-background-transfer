@@ -93,13 +93,32 @@ interface TransferOptionsBase {
   notification?: TransferNotification;
 }
 
+/**
+ * The upload protocol a transfer speaks.
+ *
+ * - `firebase-resumable`: a Firebase Storage resumable upload (the
+ *   `X-Goog-Upload-*` protocol: `POST` with `X-Goog-Upload-Command` `query`,
+ *   `upload` and `upload, finalize`).
+ *
+ * The only one so far; others may be added without changing the interface.
+ */
+export type UploadProtocol = 'firebase-resumable';
+
+/** The protocols this version knows. */
+export const UPLOAD_PROTOCOLS: readonly UploadProtocol[] = ['firebase-resumable'];
+
 export interface UploadOptions extends TransferOptionsBase {
   /**
-   * The resumable session URL (`X-Goog-Upload-URL`) of an upload you have
-   * already started with the user's token. The plugin asks it how many bytes
-   * it holds, sends the rest and finalizes.
+   * The session URL of an upload you have already started (for
+   * `firebase-resumable`, the `X-Goog-Upload-URL` from its `start`). The
+   * plugin asks it how many bytes it holds, sends the rest and finalizes.
    */
   url: string;
+  /**
+   * The protocol the session speaks. Default `firebase-resumable`. An
+   * unknown value is refused.
+   */
+  protocol?: UploadProtocol;
 }
 
 export interface DownloadOptions extends TransferOptionsBase {
@@ -118,6 +137,8 @@ export interface TransferRecord {
   state: TransferState;
   url: string;
   path: string;
+  /** Uploads: the protocol the session speaks. */
+  protocol?: UploadProtocol;
   /** Bytes the server holds (upload) or that have landed in `.part` (download). */
   bytes: number;
   /** Total size, or -1 until it is known. */
