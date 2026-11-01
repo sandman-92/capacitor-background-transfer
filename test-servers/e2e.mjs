@@ -210,7 +210,8 @@ async function assertStored(u, timeout = 180000) {
 /** Requests that carried part or block `n` (put: every PUT). */
 async function sendsOf(u, n) {
   const { requests } = await harness('GET', `/requests?target=${u.target}`);
-  const puts = requests.filter((q) => q.method === 'PUT' && q.status !== null);
+  // Every attempt counts, also one cut off before it was answered.
+  const puts = requests.filter((q) => q.method === 'PUT');
   if (u.options.protocol === 'put') return puts;
   if (u.options.protocol === 's3-multipart') return puts.filter((q) => q.partNumber === n);
   // Azure: the n-th distinct block id in the order they were first sent.
@@ -309,8 +310,10 @@ const cases = {
     await harness('POST', '/throttle', { bytesPerSecond: 0 });
     // The system may carry on by itself once the network is back; otherwise it is interrupted.
     const after = await waitState(id, ['interrupted', 'finished', 'failed', 'queued'], 240000);
-    if (after.state === 'interrupted') {
-      log(`  ${id}: interrupted (${after.reason}), starting it again`);
+    if (after.state === 'interrupted' || after.state === 'queued') {
+      // Interrupted, or (Android 14+) back in the queue for the system to run again when it sees
+      // fit: starting it again runs it now.
+      log(`  ${id}: ${after.state} (${after.reason}), starting it again`);
       await command('upload', u.options);
     }
     const done = await waitState(id, ['finished', 'failed']);
@@ -320,8 +323,15 @@ const cases = {
       const puts = await sendsOf(u, 1);
       assert(puts.length >= 2 && puts[puts.length - 1].bytes === SIZE, 'the PUT is sent again whole');
     } else {
+      // A part the server stored is never sent again; one cut off is.
       assert((await sendsOf(u, 1)).length === 1, 'part 1 is sent once');
-      assert((await sendsOf(u, 3)).length === 1, 'part 3 is sent once');
+      for (const n of [1, 2, 3]) {
+        const stored = (await sendsOf(u, n)).filter((q) => q.status >= 200 && q.status < 300);
+        assert(stored.length === 1, `part ${n} is stored once (stored ${stored.length} times)`);
+      }
+      const again = [];
+      for (const n of [2, 3]) if ((await sendsOf(u, n)).length >= 2) again.push(n);
+      assert(again.length > 0, 'the part that was cut off is sent again');
     }
     assertProgress(await events(id, 'progress'), SIZE);
     assert(device.remainders().length === 0, 'no temporary copies are left');

@@ -211,7 +211,11 @@ function proxy(target, upstream) {
         setTimeout(() => req.resume(), (chunk.length / throttle) * 1000);
       }
     });
-    req.on('end', () => !cut && up.end());
+    let bodyDone = false;
+    req.on('end', () => {
+      bodyDone = true;
+      if (!cut && !answered) up.end();
+    });
     req.on('error', () => kill('client gone'));
     up.on('response', (answer) => {
       answered = true;
@@ -222,8 +226,15 @@ function proxy(target, upstream) {
         answer.on('end', () => kill('drop-answer'));
         return;
       }
-      res.writeHead(answer.statusCode, answer.headers);
-      answer.pipe(res);
+      const reply = () => {
+        res.writeHead(answer.statusCode, answer.headers);
+        answer.pipe(res);
+      };
+      // An answer that comes before the body is in waits for the rest of it, unless the client
+      // asked to hear it first (`Expect: 100-continue`). Closing on a client still sending, as
+      // some servers do, leaves the Android emulator's network stack waiting forever.
+      if (bodyDone || /100-continue/i.test(req.headers.expect || '')) reply();
+      else req.on('end', reply);
     });
     up.on('error', (e) => {
       if (cut || answered) return;
