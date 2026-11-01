@@ -83,7 +83,10 @@ const android = {
   kill() {
     // Outright, as the system does under memory pressure.
     const pid = sh('adb', ['shell', 'pidof', APP], { check: false });
-    if (pid) this.runAs(`kill -9 ${pid}`, false);
+    if (!pid) return;
+    this.runAs(`kill -9 ${pid}`, false);
+    // Some images' SELinux policy stops run-as killing the app: there, run `adb root` first.
+    if (sh('adb', ['shell', 'pidof', APP], { check: false }) === pid) sh('adb', ['shell', 'kill', '-9', pid], { check: false });
   },
 };
 
@@ -223,11 +226,15 @@ function assert(ok, what) {
   if (!ok) throw new Error(`not so: ${what}`);
 }
 
-/** Progress as the app saw it: bytes so far, never back, never more than the total. */
+/**
+ * Progress as the app saw it: bytes so far, never more than the total, and never back except when
+ * a part cut off part-way is started again (to the stored parts' end, a part boundary; for put, 0).
+ */
 function assertProgress(progress, total) {
   assert(progress.length > 0, 'progress events arrived');
   for (let i = 1; i < progress.length; i++) {
-    assert(progress[i].bytes >= progress[i - 1].bytes || progress[i].bytes === 0, `progress went from ${progress[i - 1].bytes} to ${progress[i].bytes}`);
+    const back = progress[i].bytes < progress[i - 1].bytes;
+    assert(!back || progress[i].bytes % PART === 0, `progress went from ${progress[i - 1].bytes} to ${progress[i].bytes}`);
   }
   assert(progress.every((p) => p.bytes <= total && p.total === total), 'progress never passes the total');
 }
@@ -283,6 +290,12 @@ const cases = {
       alone = false;
       log(`  ${id}: not stored with the app closed after 120 s; opening it`);
       await launch();
+      const r = await record(id);
+      if (r?.state === 'interrupted') {
+        // Below Android 14 the worker can't come back by itself: the app starts it again.
+        log(`  ${id}: interrupted (${r.reason}), starting it again`);
+        await command('upload', u.options);
+      }
       await assertStored(u);
     }
     if (alone) log(`  ${id}: stored with the app closed`);
