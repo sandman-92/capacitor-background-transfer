@@ -36,7 +36,10 @@ public class UploadOptionsCheckTest {
         String complete = "https://s3/b/k?uploadId=x";
         assertEquals("partUrls is required for s3-multipart", check(S3, complete, null, null, null, null));
         assertEquals("partUrls is required for s3-multipart", check(S3, complete, new ArrayList<>(), null, null, null));
-        assertEquals("partUrls must be http or https URLs", check(S3, complete, Arrays.asList("https://s3/1", "ftp://x/2"), null, null, null));
+        assertEquals(
+            "partUrls must be http or https URLs",
+            check(S3, complete, Arrays.asList("https://s3/1", "ftp://x/2"), null, null, null)
+        );
         assertEquals("partUrls must be http or https URLs", check(S3, complete, Arrays.asList("https://s3/1", 7), null, null, null));
         assertEquals(
             "partUrls holds more than 10000 parts",
@@ -48,7 +51,10 @@ public class UploadOptionsCheckTest {
         );
         assertEquals("partSize must be a whole number of bytes up to 5 GiB", check(S3, complete, TWO, 0d, null, null));
         assertEquals("partSize must be a whole number of bytes up to 5 GiB", check(S3, complete, TWO, 5.5 * MIB + 0.5, null, null));
-        assertEquals("partSize must be a whole number of bytes up to 5 GiB", check(S3, complete, TWO, (double) (5 * 1024 * MIB + 1), null, null));
+        assertEquals(
+            "partSize must be a whole number of bytes up to 5 GiB",
+            check(S3, complete, TWO, (double) (5 * 1024 * MIB + 1), null, null)
+        );
         assertEquals("partSize must be a whole number of bytes up to 5 GiB", check(S3, complete, TWO, Double.NaN, null, null));
         assertEquals("listPartsUrl must be an http or https URL", check(S3, complete, TWO, null, "list", null));
         assertEquals(
@@ -59,7 +65,10 @@ public class UploadOptionsCheckTest {
         assertEquals("blockSize is only for azure-blocks", check(S3, complete, TWO, null, null, 8d * MIB));
         assertEquals("blockSize is only for azure-blocks", check(UploadAdapters.FIREBASE_RESUMABLE, "https://x/u", null, null, null, 1d));
         assertEquals("url must be a blob SAS URL (with a sig parameter)", check(AZURE, "https://acct/c/blob", null, null, null, null));
-        assertEquals("url must be a blob SAS URL (with a sig parameter)", check(AZURE, "https://acct/c/blob?sv=1&sig=", null, null, null, null));
+        assertEquals(
+            "url must be a blob SAS URL (with a sig parameter)",
+            check(AZURE, "https://acct/c/blob?sv=1&sig=", null, null, null, null)
+        );
         assertEquals("url must be a blob SAS URL (with a sig parameter)", check(AZURE, SAS + "&comp=block", null, null, null, null));
         assertEquals("blockSize must be a whole number of bytes up to 4000 MiB", check(AZURE, SAS, null, null, null, 4000d * MIB + 1));
         assertEquals("blockSize must be a whole number of bytes up to 4000 MiB", check(AZURE, SAS, null, null, null, -1d));

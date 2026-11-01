@@ -42,8 +42,8 @@ public class PartsXmlTest {
         etags.put(1, "\"a&\"");
         assertEquals(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?><CompleteMultipartUpload>" +
-            "<Part><PartNumber>1</PartNumber><ETag>&quot;a&amp;&quot;</ETag></Part>" +
-            "<Part><PartNumber>2</PartNumber><ETag>&quot;b&quot;</ETag></Part></CompleteMultipartUpload>",
+                "<Part><PartNumber>1</PartNumber><ETag>&quot;a&amp;&quot;</ETag></Part>" +
+                "<Part><PartNumber>2</PartNumber><ETag>&quot;b&quot;</ETag></Part></CompleteMultipartUpload>",
             PartsXml.completeBody(etags, 2)
         );
     }

@@ -19,13 +19,12 @@ final class Http {
     private static final int MAX_BODY = 64 * 1024;
     /** A body write that makes no headway this long ends the request (as a dropped connection). */
     static long STALL_MILLIS = 60_000;
-    private static final java.util.concurrent.ScheduledExecutorService WATCHDOG = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
-        (r) -> {
+    private static final java.util.concurrent.ScheduledExecutorService WATCHDOG =
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor((r) -> {
             Thread t = new Thread(r, "BackgroundTransfer write watchdog");
             t.setDaemon(true);
             return t;
-        }
-    );
+        });
     private static final boolean ON_ANDROID = String.valueOf(System.getProperty("java.vm.vendor")).contains("Android");
 
     private Http() {}

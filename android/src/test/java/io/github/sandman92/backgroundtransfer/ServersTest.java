@@ -229,7 +229,12 @@ public class ServersTest {
         if (protocol.equals(UploadAdapters.AZURE_BLOCKS)) {
             Harness.post("/faults", onSecondPart(new JSONObject()).put("action", "cut").put("after", MIB).put("skip", 1));
         } else {
-            Harness.post("/faults", onSecondPart(new JSONObject()).put("action", "cut").put("after", 3 * MIB));
+            Harness.post(
+                "/faults",
+                onSecondPart(new JSONObject())
+                    .put("action", "cut")
+                    .put("after", 3 * MIB)
+            );
         }
         TransferRecord first = run(r);
         assertEquals(TransferRecord.INTERRUPTED, first.state);
@@ -253,7 +258,9 @@ public class ServersTest {
     @Test
     public void anExpiredUrlFailsAndSaysWhichRequest() throws Exception {
         // Without a ListParts URL, so the first request S3 refuses is a part's.
-        TransferRecord r = upload(new JSONObject().put("expires", protocol.equals(UploadAdapters.AZURE_BLOCKS) ? -60 : 1).put("noListParts", true));
+        TransferRecord r = upload(
+            new JSONObject().put("expires", protocol.equals(UploadAdapters.AZURE_BLOCKS) ? -60 : 1).put("noListParts", true)
+        );
         Thread.sleep(2100);
         TransferRecord done = run(r);
         assertEquals(TransferRecord.FAILED, done.state);
@@ -305,7 +312,11 @@ public class ServersTest {
             assertEquals(TransferRecord.FAILED, second.state);
             assertEquals(TransferException.Reason.SESSION_CLOSED, second.reason);
             assertTrue(second.message, second.message.contains("answer never came"));
-            assertEquals("nothing more is sent", before, Harness.requests(protocol.equals(UploadAdapters.AZURE_BLOCKS) ? "azure" : "s3").length());
+            assertEquals(
+                "nothing more is sent",
+                before,
+                Harness.requests(protocol.equals(UploadAdapters.AZURE_BLOCKS) ? "azure" : "s3").length()
+            );
         }
         assertStoredWhole();
     }

@@ -108,7 +108,12 @@ final class S3MultipartUploader implements UploadAdapter {
         }
         if (a.status != 200) throw TransferException.forStatus(a.status, "complete");
         String code = PartsXml.errorCode(a.body);
-        if (code == null) throw new TransferException(TransferException.Reason.UNKNOWN, "complete answered 200 without the completed object", 200, null);
+        if (code == null) throw new TransferException(
+            TransferException.Reason.UNKNOWN,
+            "complete answered 200 without the completed object",
+            200,
+            null
+        );
         boolean busy = code.equals("InternalError") || code.equals("SlowDown") || code.equals("ServiceUnavailable");
         throw new TransferException(
             busy ? TransferException.Reason.SERVER_ERROR : TransferException.Reason.SESSION_REFUSED,

@@ -65,7 +65,8 @@ async function harness(method, route, body) {
 // ---- The device ---------------------------------------------------------------------------------
 
 const android = {
-  runAs: (command, check = true) => sh('adb', ['shell', 'run-as', APP, 'sh', '-c', `'${command}'`], { check, timeout: 300000 }),
+  runAs: (command, check = true) =>
+    sh('adb', ['shell', 'run-as', APP, 'sh', '-c', `'${command}'`], { check, timeout: 300000 }),
   makeFile(name, bytes) {
     this.runAs(`head -c ${bytes} /dev/urandom > files/${name}`);
   },
@@ -86,7 +87,8 @@ const android = {
     if (!pid) return;
     this.runAs(`kill -9 ${pid}`, false);
     // Some images' SELinux policy stops run-as killing the app: there, run `adb root` first.
-    if (sh('adb', ['shell', 'pidof', APP], { check: false }) === pid) sh('adb', ['shell', 'kill', '-9', pid], { check: false });
+    if (sh('adb', ['shell', 'pidof', APP], { check: false }) === pid)
+      sh('adb', ['shell', 'kill', '-9', pid], { check: false });
   },
 };
 
@@ -101,7 +103,10 @@ const ios = {
     fs.writeFileSync(path.join(this.data(), 'Documents', name), crypto.randomBytes(bytes));
   },
   sha256(name) {
-    return crypto.createHash('sha256').update(fs.readFileSync(path.join(this.data(), 'Documents', name))).digest('hex');
+    return crypto
+      .createHash('sha256')
+      .update(fs.readFileSync(path.join(this.data(), 'Documents', name)))
+      .digest('hex');
   },
   remainders() {
     const d = path.join(this.data(), 'Library/Application Support/BackgroundTransfer/remainders');
@@ -138,7 +143,12 @@ async function waitFor(what, check, timeout = 90000, every = 1000) {
 
 async function command(op, args = {}) {
   const { seq } = await harness('POST', '/commands', { op, args });
-  const result = await waitFor(`${op} to answer`, async () => (await reports()).find((r) => r.kind === 'result' && r.seq === seq), 60000, 500);
+  const result = await waitFor(
+    `${op} to answer`,
+    async () => (await reports()).find((r) => r.kind === 'result' && r.seq === seq),
+    60000,
+    500,
+  );
   if (!result.ok) throw Object.assign(new Error(result.error), { refused: true });
   return result.result;
 }
@@ -150,14 +160,17 @@ async function launch() {
   const before = Date.now();
   device.unlock();
   device.launch();
-  const launched = await waitFor('the app to launch', async () => (await reports()).filter((r) => r.kind === 'launched' && r.received >= before).pop());
+  const launched = await waitFor('the app to launch', async () =>
+    (await reports()).filter((r) => r.kind === 'launched' && r.received >= before).pop(),
+  );
   return launched.transfers;
 }
 
 /** Cancels and forgets whatever earlier cases left, so this case's upload isn't queued behind it. */
 async function cleanSlate() {
   for (const t of (await command('list')).transfers) {
-    if (['queued', 'running', 'interrupted'].includes(t.state)) await command('cancel', { id: t.id, direction: t.direction });
+    if (['queued', 'running', 'interrupted'].includes(t.state))
+      await command('cancel', { id: t.id, direction: t.direction });
   }
   await sleep(1000);
   await command('forget');
@@ -209,7 +222,12 @@ async function stored(u) {
 }
 
 async function assertStored(u, timeout = 180000) {
-  const o = await waitFor('the object on the server', async () => ((await stored(u)).exists ? stored(u) : null), timeout, 2000);
+  const o = await waitFor(
+    'the object on the server',
+    async () => ((await stored(u)).exists ? stored(u) : null),
+    timeout,
+    2000,
+  );
   assert(o.size === SIZE, `stored ${o.size} bytes, expected ${SIZE}`);
   assert(o.sha256 === u.sha, 'the stored object matches the file');
 }
@@ -238,16 +256,27 @@ function assertProgress(progress, total) {
   assert(progress.length > 0, 'progress events arrived');
   for (let i = 1; i < progress.length; i++) {
     const back = progress[i].bytes < progress[i - 1].bytes;
-    assert(!back || progress[i].bytes % PART === 0, `progress went from ${progress[i - 1].bytes} to ${progress[i].bytes}`);
+    assert(
+      !back || progress[i].bytes % PART === 0,
+      `progress went from ${progress[i - 1].bytes} to ${progress[i].bytes}`,
+    );
   }
-  assert(progress.every((p) => p.bytes <= total && p.total === total), 'progress never passes the total');
+  assert(
+    progress.every((p) => p.bytes <= total && p.total === total),
+    'progress never passes the total',
+  );
 }
 
 async function waitState(id, states, timeout = 180000) {
-  return waitFor(`${id} to be ${states.join(' or ')}`, async () => {
-    const r = await record(id).catch(() => null);
-    return r && states.includes(r.state) ? r : null;
-  }, timeout, 1500);
+  return waitFor(
+    `${id} to be ${states.join(' or ')}`,
+    async () => {
+      const r = await record(id).catch(() => null);
+      return r && states.includes(r.state) ? r : null;
+    },
+    timeout,
+    1500,
+  );
 }
 
 // ---- The cases ----------------------------------------------------------------------------------
@@ -268,7 +297,10 @@ const cases = {
     await assertStored(u);
     device.unlock();
     const r = await waitState(id, ['finished', 'failed']);
-    assert(r.state === 'finished' && r.bytes === SIZE && r.total === SIZE, `reported finished ${r.bytes}/${r.total} (was ${r.state})`);
+    assert(
+      r.state === 'finished' && r.bytes === SIZE && r.total === SIZE,
+      `reported finished ${r.bytes}/${r.total} (was ${r.state})`,
+    );
     assertProgress(await events(id, 'progress'), SIZE);
   },
 
@@ -307,7 +339,10 @@ const cases = {
     const transfers = await launch();
     const listed = transfers.find((t) => t.id === id);
     const r = listed?.state === 'finished' ? listed : await waitState(id, ['finished', 'failed']);
-    assert(r.state === 'finished' && r.bytes === SIZE && r.total === SIZE, `reported finished at launch ${r.bytes}/${r.total} (was ${r.state})`);
+    assert(
+      r.state === 'finished' && r.bytes === SIZE && r.total === SIZE,
+      `reported finished at launch ${r.bytes}/${r.total} (was ${r.state})`,
+    );
     assertProgress(await events(id, 'progress'), SIZE);
     assert(device.remainders().length === 0, 'no temporary copies are left');
     return alone ? undefined : 'stored only after the app was opened again';
@@ -322,7 +357,12 @@ const cases = {
     await harness('POST', '/throttle', { bytesPerSecond: 1.5 * MIB });
     await command('upload', u.options);
     // Part-way through the second part (for put, part-way through the file).
-    await waitFor('the second part to be under way', async () => (await events(id, 'progress')).some((p) => p.bytes > PART + MIB), 90000, 500);
+    await waitFor(
+      'the second part to be under way',
+      async () => (await events(id, 'progress')).some((p) => p.bytes > PART + MIB),
+      90000,
+      500,
+    );
     await harness('POST', '/outage', { seconds: 25 });
     log(`  ${id}: network cut for 25 s`);
     await harness('POST', '/throttle', { bytesPerSecond: 0 });
@@ -366,7 +406,10 @@ const cases = {
     await command('upload', u.options);
     const r = await waitState(id, ['failed', 'finished'], 90000);
     const which = { put: 'PUT', 's3-multipart': 'part 1 of 3', 'azure-blocks': 'block 1 of 3' }[protocol];
-    assert(r.state === 'failed' && r.reason === 'session-refused' && r.httpStatus === 403, `failed session-refused 403 (was ${r.state} ${r.reason} ${r.httpStatus})`);
+    assert(
+      r.state === 'failed' && r.reason === 'session-refused' && r.httpStatus === 403,
+      `failed session-refused 403 (was ${r.state} ${r.reason} ${r.httpStatus})`,
+    );
     assert(r.message.includes(which), `the message names ${which}: ${r.message}`);
     assert(!(await events(id)).some((t) => t.state === 'finished'), 'never reported finished');
     assert(!(await stored(u)).exists, 'nothing is stored');
@@ -383,7 +426,10 @@ const cases = {
     await command('upload', u.options);
     const r = await waitState(id, ['failed', 'finished'], 90000);
     const which = { put: 'PUT', 's3-multipart': 'complete', 'azure-blocks': 'commit (Put Block List)' }[protocol];
-    assert(r.state === 'failed' && r.reason === 'session-refused', `failed session-refused (was ${r.state} ${r.reason})`);
+    assert(
+      r.state === 'failed' && r.reason === 'session-refused',
+      `failed session-refused (was ${r.state} ${r.reason})`,
+    );
     assert(r.message.includes(which), `the message names ${which}: ${r.message}`);
     assert(device.remainders().length === 0, 'no temporary copies are left');
   },
@@ -410,12 +456,20 @@ const cases = {
       // Only on the server's word: the commit was sent again (iOS resends a request whose
       // connection dropped) and that answer arrived.
       const { requests } = await harness('GET', `/requests?target=${u.target}`);
-      const commits = requests.filter((q) => (protocol === 's3-multipart' ? q.method === 'POST' : q.comp === 'blocklist' && q.method === 'PUT'));
+      const commits = requests.filter((q) =>
+        protocol === 's3-multipart' ? q.method === 'POST' : q.comp === 'blocklist' && q.method === 'PUT',
+      );
       const last = commits[commits.length - 1];
-      assert(commits.length >= 2 && last.status >= 200 && last.status < 300 && !last.fault, 'finished only after a resent commit was answered');
+      assert(
+        commits.length >= 2 && last.status >= 200 && last.status < 300 && !last.fault,
+        'finished only after a resent commit was answered',
+      );
       log(`  ${id}: the commit was resent and answered ${last.status}`);
     } else {
-      assert(r.state === 'failed' && r.reason === 'session-closed', `failed session-closed (was ${r.state} ${r.reason})`);
+      assert(
+        r.state === 'failed' && r.reason === 'session-closed',
+        `failed session-closed (was ${r.state} ${r.reason})`,
+      );
       assert(!(await events(id)).some((t) => t.state === 'finished'), 'never reported finished');
     }
     assert(device.remainders().length === 0, 'no temporary copies are left');

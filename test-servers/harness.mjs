@@ -280,8 +280,14 @@ const clientHost = (req, body = {}) => body.host || (req.headers.host || 'localh
 const routes = {
   /** Healthy once both servers answer. */
   'GET /health': async () => {
-    const minio = await fetch(`${S3_UPSTREAM}/minio/health/ready`).then((r) => r.status, () => 0);
-    const azurite = await fetch(`${AZURE_UPSTREAM}/${AZURE.account}?comp=list`).then((r) => r.status, () => 0);
+    const minio = await fetch(`${S3_UPSTREAM}/minio/health/ready`).then(
+      (r) => r.status,
+      () => 0,
+    );
+    const azurite = await fetch(`${AZURE_UPSTREAM}/${AZURE.account}?comp=list`).then(
+      (r) => r.status,
+      () => 0,
+    );
     if (minio !== 200 || azurite === 0) throw new Error(`not ready: MinIO ${minio}, Azurite ${azurite}`);
     return { ok: true };
   },
@@ -294,7 +300,8 @@ const routes = {
     const parts = body.parts ?? Math.max(1, Math.ceil((body.size ?? 0) / partSize));
     const created = await s3('POST', key, { uploads: '' });
     const [uploadId] = xmlValues(created.body.toString(), 'UploadId');
-    if (created.status !== 200 || !uploadId) throw new Error(`CreateMultipartUpload: HTTP ${created.status} ${created.body}`);
+    if (created.status !== 200 || !uploadId)
+      throw new Error(`CreateMultipartUpload: HTTP ${created.status} ${created.body}`);
     const host = `${clientHost(req, body)}:${S3_PORT}`;
     const expires = body.expires ?? 3600;
     return {
@@ -313,18 +320,27 @@ const routes = {
   'POST /s3/put': async (req, body) => {
     await ensureBucket();
     const key = body.key || unique('put');
-    return { key, url: presign({ method: 'PUT', host: `${clientHost(req, body)}:${S3_PORT}`, key, expires: body.expires ?? 3600 }) };
+    return {
+      key,
+      url: presign({ method: 'PUT', host: `${clientHost(req, body)}:${S3_PORT}`, key, expires: body.expires ?? 3600 }),
+    };
   },
 
   /** What MinIO holds under `key`, or the parts of an upload still open. */
   'GET /s3/object': async (req, body, query) => {
     const r = await s3('GET', query.get('key'));
-    return r.status === 200 ? { exists: true, size: r.body.length, sha256: sha256(r.body) } : { exists: false, status: r.status };
+    return r.status === 200
+      ? { exists: true, size: r.body.length, sha256: sha256(r.body) }
+      : { exists: false, status: r.status };
   },
   'GET /s3/parts': async (req, body, query) => {
     const r = await s3('GET', query.get('key'), { uploadId: query.get('uploadId') });
     const xml = r.body.toString();
-    return { status: r.status, parts: xmlValues(xml, 'PartNumber').map(Number), sizes: xmlValues(xml, 'Size').map(Number) };
+    return {
+      status: r.status,
+      parts: xmlValues(xml, 'PartNumber').map(Number),
+      sizes: xmlValues(xml, 'Size').map(Number),
+    };
   },
 
   /** A blob SAS URL (permissions `rcw` unless asked otherwise: read for the block list, create and write). */
@@ -332,11 +348,16 @@ const routes = {
     await ensureContainer();
     const name = body.name || unique('blob');
     const sas = blobSas(name, body.permissions ?? 'rcw', body.expires ?? 3600);
-    return { name, url: `http://${clientHost(req, body)}:${AZURE_PORT}/${AZURE.account}/${AZURE.container}/${name}?${sas}` };
+    return {
+      name,
+      url: `http://${clientHost(req, body)}:${AZURE_PORT}/${AZURE.account}/${AZURE.container}/${name}?${sas}`,
+    };
   },
   'GET /azure/blob': async (req, body, query) => {
     const r = await azure('GET', `/${query.get('name')}`);
-    return r.status === 200 ? { exists: true, size: r.body.length, sha256: sha256(r.body) } : { exists: false, status: r.status };
+    return r.status === 200
+      ? { exists: true, size: r.body.length, sha256: sha256(r.body) }
+      : { exists: false, status: r.status };
   },
   'GET /azure/blocks': async (req, body, query) => {
     const r = await azure('GET', `/${query.get('name')}`, 'comp=blocklist&blocklisttype=all');
@@ -418,7 +439,9 @@ const control = http.createServer(async (req, res) => {
     if (result === null) return res.writeHead(204, cors).end();
     res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }).end(JSON.stringify(result));
   } catch (e) {
-    res.writeHead(e.status || 500, { ...cors, 'Content-Type': 'application/json' }).end(JSON.stringify({ error: String(e.message || e) }));
+    res
+      .writeHead(e.status || 500, { ...cors, 'Content-Type': 'application/json' })
+      .end(JSON.stringify({ error: String(e.message || e) }));
   }
 });
 

@@ -86,7 +86,13 @@ describe('upload protocol', () => {
   it('passes an s3-multipart upload on with its parts', async () => {
     const native = fakeNative();
     const partUrls = ['https://s3/b/k?partNumber=1', 'https://s3/b/k?partNumber=2'];
-    await wrap(native).upload({ id: 'v1', url: 'https://s3/b/k?uploadId=x', path: '/v1', protocol: 's3-multipart', partUrls });
+    await wrap(native).upload({
+      id: 'v1',
+      url: 'https://s3/b/k?uploadId=x',
+      path: '/v1',
+      protocol: 's3-multipart',
+      partUrls,
+    });
     expect(native.upload).toHaveBeenCalledWith(expect.objectContaining({ protocol: 's3-multipart', partUrls }));
   });
 

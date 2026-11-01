@@ -58,7 +58,11 @@ final class PartsXml {
     static String completeBody(Map<Integer, String> etags, int count) {
         StringBuilder b = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?><CompleteMultipartUpload>");
         for (int n = 1; n <= count; n++) {
-            b.append("<Part><PartNumber>").append(n).append("</PartNumber><ETag>").append(escape(etags.get(n))).append("</ETag></Part>");
+            b.append("<Part><PartNumber>")
+                .append(n)
+                .append("</PartNumber><ETag>")
+                .append(escape(etags.get(n)))
+                .append("</ETag></Part>");
         }
         return b.append("</CompleteMultipartUpload>").toString();
     }

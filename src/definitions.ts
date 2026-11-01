@@ -126,7 +126,12 @@ interface TransferOptionsBase {
 export type UploadProtocol = 'firebase-resumable' | 'put' | 's3-multipart' | 'azure-blocks';
 
 /** The protocols this version knows. */
-export const UPLOAD_PROTOCOLS: readonly UploadProtocol[] = ['firebase-resumable', 'put', 's3-multipart', 'azure-blocks'];
+export const UPLOAD_PROTOCOLS: readonly UploadProtocol[] = [
+  'firebase-resumable',
+  'put',
+  's3-multipart',
+  'azure-blocks',
+];
 
 const MIB = 1024 * 1024;
 

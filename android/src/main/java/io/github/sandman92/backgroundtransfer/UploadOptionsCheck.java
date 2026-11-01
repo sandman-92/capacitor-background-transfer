@@ -49,7 +49,9 @@ public final class UploadOptionsCheck {
         if (azure) {
             if (!isSasUrl(url)) return "url must be a blob SAS URL (with a sig parameter)";
             double size = blockSize != null ? blockSize : DEFAULT_PART_SIZE;
-            if (!isWhole(size) || size < 1 || size > AZURE_MAX_BLOCK_SIZE) return "blockSize must be a whole number of bytes up to 4000 MiB";
+            if (
+                !isWhole(size) || size < 1 || size > AZURE_MAX_BLOCK_SIZE
+            ) return "blockSize must be a whole number of bytes up to 4000 MiB";
         }
         return null;
     }
@@ -58,9 +60,20 @@ public final class UploadOptionsCheck {
     public static String checkSize(String protocol, int partUrlCount, long partSize, long blockSize, long fileSize) {
         if (UploadAdapters.S3_MULTIPART.equals(protocol)) {
             int needed = Parts.count(fileSize, partSize, true);
-            if (needed > S3_MAX_PARTS) return "a " + fileSize + "-byte file in " + partSize + "-byte parts needs more than " + S3_MAX_PARTS + " parts";
+            if (needed > S3_MAX_PARTS) return (
+                "a " + fileSize + "-byte file in " + partSize + "-byte parts needs more than " + S3_MAX_PARTS + " parts"
+            );
             if (needed != partUrlCount) {
-                return "partUrls holds " + partUrlCount + " parts but a " + fileSize + "-byte file in " + partSize + "-byte parts needs " + needed;
+                return (
+                    "partUrls holds " +
+                    partUrlCount +
+                    " parts but a " +
+                    fileSize +
+                    "-byte file in " +
+                    partSize +
+                    "-byte parts needs " +
+                    needed
+                );
             }
         }
         if (UploadAdapters.AZURE_BLOCKS.equals(protocol) && Parts.count(fileSize, blockSize, false) > AZURE_MAX_BLOCKS) {

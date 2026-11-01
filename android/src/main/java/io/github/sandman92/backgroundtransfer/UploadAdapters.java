@@ -21,7 +21,9 @@ public final class UploadAdapters {
 
     public static final String DEFAULT = FIREBASE_RESUMABLE;
 
-    public static final List<String> KNOWN = Collections.unmodifiableList(Arrays.asList(FIREBASE_RESUMABLE, PUT, S3_MULTIPART, AZURE_BLOCKS));
+    public static final List<String> KNOWN = Collections.unmodifiableList(
+        Arrays.asList(FIREBASE_RESUMABLE, PUT, S3_MULTIPART, AZURE_BLOCKS)
+    );
 
     private UploadAdapters() {}
 
