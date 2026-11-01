@@ -167,3 +167,20 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(js["state"] as? String, "queued")
     }
 }
+
+final class FilesRangeTests: XCTestCase {
+    func testARangeHoldsExactlyItsBytes() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("bt-range-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let data = Data((0..<100_003).map { UInt8(($0 * 7 + 13) % 251) })
+        let source = dir.appendingPathComponent("f")
+        try data.write(to: source)
+        let part = dir.appendingPathComponent("parts/2")
+        XCTAssertEqual(try Files.writeRange(of: source, from: 40_000, length: 30_000, to: part, piece: 4096), 30_000)
+        XCTAssertEqual(try Data(contentsOf: part), data.subdata(in: 40_000..<70_000))
+        XCTAssertEqual(try Files.writeRange(of: source, from: 100_000, length: 3, to: part), 3)
+        XCTAssertThrowsError(try Files.writeRange(of: source, from: 100_000, length: 4, to: part))
+        XCTAssertEqual(try Files.writeRange(of: source, from: 0, length: 0, to: part), 0)
+    }
+}

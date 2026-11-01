@@ -5,6 +5,15 @@ import Foundation
 public enum UploadProtocol: String, CaseIterable, Codable {
     /// A Firebase Storage resumable upload: the `X-Goog-Upload-*` protocol.
     case firebaseResumable = "firebase-resumable"
+    /// The whole file in one `PUT`.
+    case put
+    /// An S3 multipart upload with every URL presigned up front.
+    case s3Multipart = "s3-multipart"
+    /// An Azure block blob through one SAS URL.
+    case azureBlocks = "azure-blocks"
+
+    /// Sent in parts or blocks, each a background task of its own, then committed.
+    public var inParts: Bool { self == .s3Multipart || self == .azureBlocks }
 
     public static let defaultProtocol: UploadProtocol = .firebaseResumable
 

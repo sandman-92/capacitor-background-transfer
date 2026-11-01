@@ -97,6 +97,15 @@ final class S3MultipartUploader implements UploadAdapter {
         // An answer came, so the completion wasn't lost: it can be tried again.
         r.committing = false;
         progress.saveState();
+        if (a.status == 404) {
+            // NoSuchUpload: completed (perhaps by a completion whose answer was lost) or aborted.
+            throw new TransferException(
+                TransferException.Reason.SESSION_CLOSED,
+                "complete HTTP 404: the upload is no longer open (completed or aborted): check the object",
+                404,
+                null
+            );
+        }
         if (a.status != 200) throw TransferException.forStatus(a.status, "complete");
         String code = PartsXml.errorCode(a.body);
         if (code == null) throw new TransferException(TransferException.Reason.UNKNOWN, "complete answered 200 without the completed object", 200, null);
