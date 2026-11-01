@@ -27,7 +27,8 @@ final class TransferManager: NSObject {
     private var lastProgress: [String: Date] = [:]
     /// Upload responses' bodies (the finalized object's metadata), kept to check its size.
     private var uploadBodies: [Int: Data] = [:]
-    /// Session checks still waiting for an answer; the system's completion handler is held until none are.
+    /// Session checks still waiting for an answer, and parts being made ready for their task; the
+    /// system's completion handler is held until none are.
     private var checks = 0
     private var heldHandlers: [() -> Void] = []
     /// Calls that arrive before `start()` has reconciled the records wait here.
@@ -155,8 +156,15 @@ final class TransferManager: NSObject {
             r.httpStatus = nil
             r.taskIdentifier = nil
             r.refusedStatus = nil
+            r.currentPart = nil
             if r.direction == .download {
                 r.bytes = (try? Files.fileSize(Files.partURL(for: URL(fileURLWithPath: r.path)))) ?? 0
+            } else if let existing = self.store.get(key: wanted.key), existing.url == wanted.url, existing.protocol == wanted.protocol,
+                      UploadProtocol.resolve(r.protocol)?.inParts == true {
+                // The same upload: what it sent, and whether its commit went, carry over.
+                r.parts = existing.parts
+                r.committing = existing.committing
+                r.bytes = existing.bytes
             }
             r = self.save(r, event: "stateChange")
             done(r)
@@ -200,11 +208,7 @@ final class TransferManager: NSObject {
 
     private func startUpload(_ record: TransferRecord) {
         var r = record
-        // Where another protocol's adapter would plug in.
-        switch UploadProtocol.resolve(r.protocol) {
-        case .firebaseResumable:
-            break
-        case nil:
+        guard let chosen = UploadProtocol.resolve(r.protocol) else {
             fail(&r, Reason.unknown, "unknown upload protocol \(r.protocol ?? "")")
             return
         }
@@ -219,6 +223,17 @@ final class TransferManager: NSObject {
         r.total = size
         guard let url = URL(string: r.url) else {
             fail(&r, Reason.sessionRefused, "not a URL")
+            return
+        }
+        // Each protocol's adapter plugs in here.
+        switch chosen {
+        case .firebaseResumable:
+            break
+        case .put:
+            sendWhole(r, from: file)
+            return
+        case .s3Multipart, .azureBlocks:
+            startParts(r)
             return
         }
         // Ask the session what it holds. A plain (foreground) request: the app is on screen now.
@@ -323,6 +338,174 @@ final class TransferManager: NSObject {
         r.taskIdentifier = task.taskIdentifier
         save(r, event: "progress")
         task.resume()
+    }
+
+    // MARK: put, and uploads in parts
+
+    /// `put`: the whole file in one background task, sent in place (no copy).
+    private func sendWhole(_ record: TransferRecord, from file: URL) {
+        var r = record
+        guard let request = PartsUpload.putRequest(r) else { return fail(&r, Reason.sessionRefused, "not a URL") }
+        let task = uploadSession.uploadTask(with: request, fromFile: file)
+        task.taskDescription = r.key
+        r.startOffset = 0
+        r.bytes = 0
+        r.taskIdentifier = task.taskIdentifier
+        save(r, event: "progress")
+        task.resume()
+    }
+
+    /// `s3-multipart` and `azure-blocks`: asks the server what it holds (ListParts or Get Block List,
+    /// on a plain session: the app is on screen), then hands the parts to the background session
+    /// one at a time.
+    private func startParts(_ record: TransferRecord) {
+        var r = record
+        if let stop = PartsUpload.beforeStart(r, size: r.total) {
+            apply(stop, to: &r, httpStatus: 0)
+            return
+        }
+        guard var probe = PartsUpload.probe(r) else {
+            sendNextPart(r)
+            return
+        }
+        probe.timeoutInterval = UploadOutcome.checkTimeout
+        let session = URLSession(configuration: .ephemeral)
+        session.dataTask(with: probe) { body, response, error in
+            session.finishTasksAndInvalidate()
+            self.queue.async {
+                guard var now = self.store.get(key: r.key), now.state == .queued else { return } // cancelled meanwhile
+                now.total = r.total
+                let status = error == nil ? (response as? HTTPURLResponse)?.statusCode : nil
+                if let stop = PartsUpload.afterProbe(&now, status: status, body: body, size: now.total) {
+                    self.apply(stop, to: &now, httpStatus: status ?? 0)
+                    return
+                }
+                now.bytes = PartsUpload.storedBytes(now, size: now.total)
+                self.sendNextPart(self.store.put(now))
+            }
+        }.resume()
+    }
+
+    /// Hands the next part (from a temporary copy of its range, made now and removed when its task
+    /// ends) or the commit to the background session. Runs after each part's answer too, with the
+    /// app perhaps woken in the background for it: the system's completion handler is held until the
+    /// next task is handed over, so the app isn't suspended half-way.
+    private func sendNextPart(_ record: TransferRecord) {
+        var r = record
+        let size = r.total
+        r.taskIdentifier = nil
+        switch PartsUpload.next(r, size: size) {
+        case .part(let n, let offset, let length):
+            let copy = directory.appendingPathComponent("remainders/\(UUID().uuidString)")
+            // Named before it is written, so a process that ends mid-copy leaves a file the next launch removes.
+            r.remainderPath = copy.path
+            r.currentPart = n
+            r = store.put(r)
+            hold()
+            let time = BackgroundTime("BackgroundTransfer part copy")
+            DispatchQueue.global(qos: .utility).async {
+                var copyError: NSError?
+                do {
+                    try Files.writeRange(of: URL(fileURLWithPath: r.path), from: offset, length: length, to: copy)
+                } catch {
+                    copyError = error as NSError
+                }
+                self.queue.async {
+                    defer {
+                        time.end()
+                        self.release()
+                    }
+                    guard var now = self.store.get(key: r.key), now.isActive, now.remainderPath == copy.path else {
+                        // Cancelled (or started again) while copying.
+                        try? FileManager.default.removeItem(at: copy)
+                        return
+                    }
+                    if let ns = copyError {
+                        let missing = !FileManager.default.fileExists(atPath: now.path)
+                        self.fail(&now, Reason.isDiskFull(ns) ? Reason.diskFull : (missing ? Reason.fileMissing : Reason.sizeMismatch),
+                                  "part \(n) copy: \(ns.localizedDescription)")
+                        return
+                    }
+                    guard let request = PartsUpload.partRequest(now, n: n, size: size) else {
+                        self.fail(&now, Reason.sessionRefused, "part \(n) has no URL")
+                        return
+                    }
+                    let task = self.uploadSession.uploadTask(with: request, fromFile: copy)
+                    task.taskDescription = now.key
+                    now.startOffset = PartsUpload.storedBytes(now, size: size)
+                    now.taskIdentifier = task.taskIdentifier
+                    self.save(now, event: "progress")
+                    task.resume()
+                }
+            }
+        case .commit:
+            guard let (request, body) = PartsUpload.commitRequest(r, size: size) else {
+                return fail(&r, Reason.sessionRefused, "not a URL")
+            }
+            let copy = directory.appendingPathComponent("remainders/\(UUID().uuidString)")
+            do {
+                try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try body.write(to: copy, options: [.completeFileProtectionUntilFirstUserAuthentication])
+            } catch {
+                let ns = error as NSError
+                return fail(&r, Reason.isDiskFull(ns) ? Reason.diskFull : Reason.unknown, "commit body: \(ns.localizedDescription)")
+            }
+            let task = uploadSession.uploadTask(with: request, fromFile: copy)
+            task.taskDescription = r.key
+            r.remainderPath = copy.path
+            r.currentPart = 0
+            // From here a lost answer can't be told from a committed object.
+            r.committing = true
+            r.startOffset = size
+            r.taskIdentifier = task.taskIdentifier
+            save(r, event: "progress")
+            task.resume()
+        }
+    }
+
+    /// The answer to a `put`'s task or to a part's or the commit's.
+    private func answered(_ record: TransferRecord, status: Int, etag: String?, body: Data?) {
+        var r = record
+        guard UploadProtocol.resolve(r.protocol)?.inParts == true else {
+            apply(PartsUpload.afterPut(status: status), to: &r, httpStatus: status)
+            return
+        }
+        let n = r.currentPart ?? -1
+        r.currentPart = nil
+        if n == 0 {
+            let outcome = PartsUpload.afterCommit(&r, status: status, body: body)
+            apply(outcome, to: &r, httpStatus: status)
+            return
+        }
+        guard n > 0 else {
+            apply(.failed(reason: Reason.unknown, message: "an answer came for no part"), to: &r, httpStatus: status)
+            return
+        }
+        if let stop = PartsUpload.afterPart(&r, n: n, status: status, etag: etag, size: r.total) {
+            apply(stop, to: &r, httpStatus: status)
+            return
+        }
+        // Stored: on to the next one (also when the app was opened and found this part's task gone).
+        r.state = .running
+        r.reason = nil
+        r.message = nil
+        r.httpStatus = nil
+        r.bytes = PartsUpload.storedBytes(r, size: r.total)
+        r = store.put(r)
+        listener?.transferChanged(r, event: "progress")
+        sendNextPart(r)
+    }
+
+    /// Keeps the system's completion handler while work the app must finish is under way.
+    private func hold() { checks += 1 }
+
+    private func release() {
+        checks -= 1
+        if checks == 0 {
+            let handlers = heldHandlers
+            heldHandlers = []
+            handlers.forEach { DispatchQueue.main.async(execute: $0) }
+        }
     }
 
     // MARK: Download
@@ -444,6 +627,10 @@ final class TransferManager: NSObject {
             }
             let http = task.response as? HTTPURLResponse
             let status = http?.statusCode ?? 0
+            if UploadProtocol.resolve(r.protocol) != .firebaseResumable {
+                answered(r, status: status, etag: http?.value(forHTTPHeaderField: "ETag"), body: body)
+                return
+            }
             let received = http?.value(forHTTPHeaderField: "X-Goog-Upload-Size-Received").flatMap { Int64($0) }
             let outcome = UploadOutcome.afterResponse(status: status, uploadStatus: http?.value(forHTTPHeaderField: "X-Goog-Upload-Status"),
                                                       received: received, body: body, total: r.total)
@@ -496,17 +683,12 @@ final class TransferManager: NSObject {
             apply(.failed(reason: Reason.sessionRefused, message: "not a URL"), to: &r, httpStatus: status)
             return
         }
-        checks += 1
+        hold()
         let time = BackgroundTime("BackgroundTransfer session check")
         querySession(url, headers: r.headers) { response, error in
             defer {
                 time.end()
-                self.checks -= 1
-                if self.checks == 0 {
-                    let handlers = self.heldHandlers
-                    self.heldHandlers = []
-                    handlers.forEach { DispatchQueue.main.async(execute: $0) }
-                }
+                self.release()
             }
             guard var now = self.store.get(key: r.key), now.isActive, now.taskIdentifier == nil, now.refusedStatus == status else { return }
             let q = response as? HTTPURLResponse
@@ -609,7 +791,12 @@ extension TransferManager: URLSessionDataDelegate, URLSessionDownloadDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64,
                     totalBytesExpectedToSend: Int64) {
         guard let key = task.taskDescription, let r = store.get(key: key) else { return }
-        progressed(task, bytes: r.startOffset + totalBytesSent, total: r.total)
+        var bytes = r.startOffset + totalBytesSent
+        if UploadProtocol.resolve(r.protocol) != .firebaseResumable {
+            // Never the whole object before the server has confirmed it (a commit's body isn't file bytes).
+            bytes = min(r.currentPart == 0 ? r.total : bytes, max(r.total - 1, 0))
+        }
+        progressed(task, bytes: bytes, total: r.total)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
