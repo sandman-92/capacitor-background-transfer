@@ -1,0 +1,375 @@
+// End-to-end runs of the upload protocols on ONE booted device: the Android emulator or the iOS
+// simulator, with the example app built in harness mode (`npm run build:harness` in example-app,
+// then `npx cap sync` and install). The app takes its commands from the harness (harness.mjs);
+// this script makes the files on the device, sets the uploads up, locks, backgrounds and kills the
+// app, and checks what the servers stored and what the app reports.
+//
+//   node test-servers/e2e.mjs --platform android [--only s3-multipart] [--case locked]
+//   node test-servers/e2e.mjs --platform ios
+//
+// Node's standard library only. Needs the servers (`npm run servers:up`) and adb or simctl.
+import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const args = process.argv.slice(2);
+const opt = (name, fallback) => {
+  const i = args.indexOf(`--${name}`);
+  return i >= 0 ? args[i + 1] : fallback;
+};
+const PLATFORM = opt('platform', 'android');
+const ONLY = opt('only');
+const CASE = opt('case');
+const HARNESS = opt('harness', 'http://localhost:8790');
+const APP = 'io.github.sandman92.backgroundtransfer.example';
+const SIMCTL =
+  process.env.SIMCTL || '/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl';
+const MIB = 1024 * 1024;
+const PART = 5 * MIB;
+/** Three parts or blocks: 5, 5 and 1 MiB. */
+const SIZE = 11 * MIB;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const log = (...parts) => console.log(new Date().toISOString().slice(11, 19), ...parts);
+
+function sh(cmd, argv, { check = true, timeout = 120000 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return execFileSync(cmd, argv, { encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    } catch (e) {
+      const text = `${e.stdout || ''}${e.stderr || ''}`;
+      // adb's server sometimes drops the device for a moment.
+      if (cmd === 'adb' && attempt < 3 && /offline|not found|closed|protocol fault/.test(text)) {
+        execFileSync('adb', ['wait-for-device'], { timeout: 120000 });
+        continue;
+      }
+      if (!check) return text.trim();
+      throw new Error(`${cmd} ${argv.join(' ')}: ${text}`);
+    }
+  }
+}
+
+async function harness(method, route, body) {
+  const response = await fetch(HARNESS + route, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (response.status === 204) return null;
+  const json = await response.json();
+  if (response.status >= 300) throw new Error(`${method} ${route}: ${JSON.stringify(json)}`);
+  return json;
+}
+
+// ---- The device ---------------------------------------------------------------------------------
+
+const android = {
+  runAs: (command, check = true) => sh('adb', ['shell', 'run-as', APP, 'sh', '-c', `'${command}'`], { check, timeout: 300000 }),
+  makeFile(name, bytes) {
+    this.runAs(`head -c ${bytes} /dev/urandom > files/${name}`);
+  },
+  sha256(name) {
+    return this.runAs(`sha256sum files/${name}`).split(/\s+/)[0];
+  },
+  remainders: () => [],
+  launch: () => sh('adb', ['shell', 'am', 'start', '-n', `${APP}/.MainActivity`]),
+  background: () => sh('adb', ['shell', 'input', 'keyevent', 'KEYCODE_HOME']),
+  lock: () => sh('adb', ['shell', 'input', 'keyevent', 'KEYCODE_SLEEP']),
+  unlock() {
+    sh('adb', ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP']);
+    sh('adb', ['shell', 'wm', 'dismiss-keyguard'], { check: false });
+  },
+  kill() {
+    // Outright, as the system does under memory pressure.
+    const pid = sh('adb', ['shell', 'pidof', APP], { check: false });
+    if (pid) this.runAs(`kill -9 ${pid}`, false);
+  },
+};
+
+const ios = {
+  _data: null,
+  data() {
+    this._data ??= sh(SIMCTL, ['get_app_container', 'booted', APP, 'data']);
+    return this._data;
+  },
+  makeFile(name, bytes) {
+    fs.mkdirSync(path.join(this.data(), 'Documents'), { recursive: true });
+    fs.writeFileSync(path.join(this.data(), 'Documents', name), crypto.randomBytes(bytes));
+  },
+  sha256(name) {
+    return crypto.createHash('sha256').update(fs.readFileSync(path.join(this.data(), 'Documents', name))).digest('hex');
+  },
+  remainders() {
+    const d = path.join(this.data(), 'Library/Application Support/BackgroundTransfer/remainders');
+    return fs.existsSync(d) ? fs.readdirSync(d) : [];
+  },
+  launch: () => sh(SIMCTL, ['launch', 'booted', APP]),
+  // Opening Settings sends the app to the background.
+  background: () => sh(SIMCTL, ['launch', 'booted', 'com.apple.Preferences']),
+  lock() {},
+  unlock() {},
+  // Ends the process as the system does when it needs the memory (not a swipe away).
+  kill: () => sh(SIMCTL, ['terminate', 'booted', APP], { check: false }),
+};
+
+const device = PLATFORM === 'ios' ? ios : android;
+
+// ---- Talking to the app -------------------------------------------------------------------------
+
+let since = 0;
+
+async function reports() {
+  return (await harness('GET', `/reports?since=${since}`)).reports;
+}
+
+async function waitFor(what, check, timeout = 90000, every = 1000) {
+  const until = Date.now() + timeout;
+  for (;;) {
+    const value = await check();
+    if (value) return value;
+    if (Date.now() > until) throw new Error(`timed out waiting for ${what}`);
+    await sleep(every);
+  }
+}
+
+async function command(op, args = {}) {
+  const { seq } = await harness('POST', '/commands', { op, args });
+  const result = await waitFor(`${op} to answer`, async () => (await reports()).find((r) => r.kind === 'result' && r.seq === seq), 60000, 500);
+  if (!result.ok) throw Object.assign(new Error(result.error), { refused: true });
+  return result.result;
+}
+
+/** Starts the app afresh (ending it first if it is running) and returns what it listed at launch. */
+async function launch() {
+  device.kill();
+  await sleep(1000);
+  const before = Date.now();
+  device.unlock();
+  device.launch();
+  const launched = await waitFor('the app to launch', async () => (await reports()).filter((r) => r.kind === 'launched' && r.received >= before).pop());
+  return launched.transfers;
+}
+
+async function record(id) {
+  return (await command('list')).transfers.find((t) => t.id === id && t.direction === 'upload');
+}
+
+/** The transfer's state events since the case started. */
+async function events(id, kind = 'stateChange') {
+  return (await reports()).filter((r) => r.kind === kind && r.transfer?.id === id).map((r) => r.transfer);
+}
+
+// ---- Uploads as an app sets them up -------------------------------------------------------------
+
+async function setUp(protocol, id, extra = {}) {
+  const name = `${id}.bin`;
+  device.makeFile(name, SIZE);
+  const sha = device.sha256(name);
+  let options;
+  let object;
+  if (protocol === 'put') {
+    const put = await harness('POST', '/s3/put', { ...extra, key: id });
+    options = { id, name, protocol, url: put.url };
+    object = { route: `/s3/object?key=${put.key}` };
+  } else if (protocol === 's3-multipart') {
+    const m = await harness('POST', '/s3/multipart', { ...extra, key: id, size: SIZE, partSize: PART });
+    options = { id, name, protocol, url: m.url, partUrls: m.partUrls, partSize: PART, listPartsUrl: m.listPartsUrl };
+    object = { route: `/s3/object?key=${m.key}` };
+  } else {
+    const blob = await harness('POST', '/azure/blob', { ...extra, name: id });
+    options = { id, name, protocol, url: blob.url, blockSize: PART };
+    object = { route: `/azure/blob?name=${blob.name}` };
+  }
+  return { options, sha, object, target: protocol === 'azure-blocks' ? 'azure' : 's3' };
+}
+
+async function stored(u) {
+  return harness('GET', u.object.route);
+}
+
+async function assertStored(u) {
+  const o = await waitFor('the object on the server', async () => ((await stored(u)).exists ? stored(u) : null), 180000, 2000);
+  assert(o.size === SIZE, `stored ${o.size} bytes, expected ${SIZE}`);
+  assert(o.sha256 === u.sha, 'the stored object matches the file');
+}
+
+/** Requests that carried part or block `n` (put: every PUT). */
+async function sendsOf(u, n) {
+  const { requests } = await harness('GET', `/requests?target=${u.target}`);
+  const puts = requests.filter((q) => q.method === 'PUT' && q.status !== null);
+  if (u.options.protocol === 'put') return puts;
+  if (u.options.protocol === 's3-multipart') return puts.filter((q) => q.partNumber === n);
+  // Azure: the n-th distinct block id in the order they were first sent.
+  const ids = [...new Set(puts.filter((q) => q.comp === 'block').map((q) => q.blockid))];
+  return puts.filter((q) => q.comp === 'block' && q.blockid === ids[n - 1]);
+}
+
+function assert(ok, what) {
+  if (!ok) throw new Error(`not so: ${what}`);
+}
+
+/** Progress as the app saw it: bytes so far, never back, never more than the total. */
+function assertProgress(progress, total) {
+  assert(progress.length > 0, 'progress events arrived');
+  for (let i = 1; i < progress.length; i++) {
+    assert(progress[i].bytes >= progress[i - 1].bytes || progress[i].bytes === 0, `progress went from ${progress[i - 1].bytes} to ${progress[i].bytes}`);
+  }
+  assert(progress.every((p) => p.bytes <= total && p.total === total), 'progress never passes the total');
+}
+
+async function waitState(id, states, timeout = 180000) {
+  return waitFor(`${id} to be ${states.join(' or ')}`, async () => {
+    const r = await record(id).catch(() => null);
+    return r && states.includes(r.state) ? r : null;
+  }, timeout, 1500);
+}
+
+// ---- The cases ----------------------------------------------------------------------------------
+
+const cases = {
+  /** Criteria 1 and 6: locked (Android) or backgrounded, then killed; the whole object, reported finished. */
+  async locked(protocol) {
+    const id = `locked-${protocol}-${Date.now() % 100000}`;
+    const u = await setUp(protocol, id);
+    await launch();
+    await harness('POST', '/throttle', { bytesPerSecond: 1.5 * MIB });
+    await command('upload', u.options);
+    await waitFor('bytes to move', async () => (await events(id, 'progress')).some((p) => p.bytes > MIB));
+    if (PLATFORM === 'android') device.lock();
+    else device.background();
+    await sleep(3000);
+    device.kill();
+    log(`  ${id}: ${PLATFORM === 'android' ? 'locked' : 'in the background'}, process killed`);
+    await harness('POST', '/throttle', { bytesPerSecond: 3 * MIB });
+    await assertStored(u);
+    await sleep(3000);
+    const transfers = await launch();
+    const r = transfers.find((t) => t.id === id) ?? (await waitState(id, ['finished']));
+    const finished = r.state === 'finished' ? r : await waitState(id, ['finished']);
+    assert(finished.bytes === SIZE && finished.total === SIZE, `reported ${finished.bytes}/${finished.total}`);
+    assertProgress(await events(id, 'progress'), SIZE);
+    assert(device.remainders().length === 0, 'no temporary copies are left');
+  },
+
+  /** Criteria 2 and 6: interrupted part-way (network cut), started again; nothing stored is sent again. */
+  async interrupted(protocol) {
+    const id = `cut-${protocol}-${Date.now() % 100000}`;
+    const u = await setUp(protocol, id);
+    await launch();
+    await harness('POST', '/throttle', { bytesPerSecond: 1.5 * MIB });
+    await command('upload', u.options);
+    // Part-way through the second part (for put, part-way through the file).
+    await waitFor('the second part to be under way', async () => (await events(id, 'progress')).some((p) => p.bytes > PART + MIB), 90000, 500);
+    await harness('POST', '/outage', { seconds: 25 });
+    log(`  ${id}: network cut for 25 s`);
+    await harness('POST', '/throttle', { bytesPerSecond: 0 });
+    // The system may carry on by itself once the network is back; otherwise it is interrupted.
+    const after = await waitState(id, ['interrupted', 'finished', 'failed', 'queued'], 120000);
+    if (after.state === 'interrupted') {
+      log(`  ${id}: interrupted (${after.reason}), starting it again`);
+      await command('upload', u.options);
+    }
+    const done = await waitState(id, ['finished', 'failed']);
+    assert(done.state === 'finished', `finished (was ${done.state} ${done.reason || ''} ${done.message || ''})`);
+    await assertStored(u);
+    if (protocol === 'put') {
+      const puts = await sendsOf(u, 1);
+      assert(puts.length >= 2 && puts[puts.length - 1].bytes === SIZE, 'the PUT is sent again whole');
+    } else {
+      assert((await sendsOf(u, 1)).length === 1, 'part 1 is sent once');
+      assert((await sendsOf(u, 3)).length === 1, 'part 3 is sent once');
+    }
+    assertProgress(await events(id, 'progress'), SIZE);
+    assert(device.remainders().length === 0, 'no temporary copies are left');
+  },
+
+  /** Criterion 3: an expired URL or SAS fails with a reason saying which request; nothing left behind. */
+  async expired(protocol) {
+    const id = `expired-${protocol}-${Date.now() % 100000}`;
+    const u = await setUp(protocol, id, { expires: protocol === 'azure-blocks' ? -60 : 1 });
+    if (protocol === 's3-multipart') delete u.options.listPartsUrl;
+    await sleep(2100);
+    await launch();
+    await command('upload', u.options);
+    const r = await waitState(id, ['failed', 'finished'], 90000);
+    const which = { put: 'PUT', 's3-multipart': 'part 1 of 3', 'azure-blocks': 'block 1 of 3' }[protocol];
+    assert(r.state === 'failed' && r.reason === 'session-refused' && r.httpStatus === 403, `failed session-refused 403 (was ${r.state} ${r.reason} ${r.httpStatus})`);
+    assert(r.message.includes(which), `the message names ${which}: ${r.message}`);
+    assert(!(await events(id)).some((t) => t.state === 'finished'), 'never reported finished');
+    assert(!(await stored(u)).exists, 'nothing is stored');
+    assert(device.remainders().length === 0, 'no temporary copies are left');
+  },
+
+  /** Criterion 3: the commit (for put, the PUT) refused. */
+  async refusedCommit(protocol) {
+    const id = `refused-${protocol}-${Date.now() % 100000}`;
+    const u = await setUp(protocol, id);
+    await launch();
+    await harness('POST', '/faults', commitFault(protocol, { action: 'status', status: 403 }));
+    await command('upload', u.options);
+    const r = await waitState(id, ['failed', 'finished'], 90000);
+    const which = { put: 'PUT', 's3-multipart': 'complete', 'azure-blocks': 'commit (Put Block List)' }[protocol];
+    assert(r.state === 'failed' && r.reason === 'session-refused', `failed session-refused (was ${r.state} ${r.reason})`);
+    assert(r.message.includes(which), `the message names ${which}: ${r.message}`);
+    assert(device.remainders().length === 0, 'no temporary copies are left');
+  },
+
+  /** Criterion 4: the commit succeeded but its answer was lost; never reported finished on its own say-so. */
+  async lostAnswer(protocol) {
+    const id = `lost-${protocol}-${Date.now() % 100000}`;
+    const u = await setUp(protocol, id);
+    await launch();
+    await harness('POST', '/faults', commitFault(protocol, { action: 'drop-answer' }));
+    await command('upload', u.options);
+    let r = await waitState(id, ['interrupted', 'failed', 'finished'], 120000);
+    await assertStored(u);
+    if (r.state === 'interrupted') {
+      log(`  ${id}: interrupted (${r.reason}), starting it again`);
+      await command('upload', u.options);
+      r = await waitState(id, ['failed', 'finished'], 90000);
+    }
+    if (protocol === 'put') {
+      // The PUT is its own confirmation: sent again, it is answered.
+      assert(r.state === 'finished', `finished after the PUT was sent again (was ${r.state} ${r.reason})`);
+    } else {
+      assert(r.state === 'failed' && r.reason === 'session-closed', `failed session-closed (was ${r.state} ${r.reason})`);
+      assert(!(await events(id)).some((t) => t.state === 'finished'), 'never reported finished');
+    }
+    assert(device.remainders().length === 0, 'no temporary copies are left');
+  },
+};
+
+function commitFault(protocol, fault) {
+  if (protocol === 's3-multipart') return { ...fault, target: 's3', method: 'POST' };
+  if (protocol === 'azure-blocks') return { ...fault, target: 'azure', method: 'PUT', query: 'comp=blocklist' };
+  return { ...fault, target: 's3', method: 'PUT' };
+}
+
+// ---- Running them -------------------------------------------------------------------------------
+
+const protocols = ['put', 's3-multipart', 'azure-blocks'].filter((p) => !ONLY || p === ONLY);
+const names = Object.keys(cases).filter((c) => !CASE || c === CASE);
+const results = [];
+for (const name of names) {
+  for (const protocol of protocols) {
+    await harness('POST', '/reset', {});
+    await harness('POST', '/reports/clear', {});
+    since = 0;
+    log(`${name} ${protocol}`);
+    try {
+      await cases[name](protocol);
+      results.push({ name, protocol, ok: true });
+      log(`  pass`);
+    } catch (e) {
+      results.push({ name, protocol, ok: false, error: e.message });
+      log(`  FAIL ${e.message}`);
+      device.unlock();
+    }
+  }
+}
+await harness('POST', '/reset', {});
+const failed = results.filter((r) => !r.ok);
+console.log(`\n${PLATFORM}: ${results.length - failed.length} of ${results.length} passed`);
+for (const f of failed) console.log(`  FAIL ${f.name} ${f.protocol}: ${f.error}`);
+process.exit(failed.length ? 1 : 0);

@@ -15,3 +15,9 @@ read from and written to the app's data directory.
 
 The native projects allow plain `http` (`usesCleartextTraffic`, `NSAllowsArbitraryLoads`) so the
 app can talk to a test server on your computer. Don't copy that into a release build.
+
+## Harness mode
+
+`npm run build:harness` (then `npx cap sync`) builds in a remote control for the end-to-end runs
+in `../test-servers`: the app polls the test harness on your computer for commands and reports
+every result and event back. `npm run build` leaves it out again.
