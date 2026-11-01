@@ -117,13 +117,61 @@ public enum PartsUpload {
         return nil
     }
 
-    /// The first part not yet stored, or the commit.
-    public static func next(_ r: TransferRecord, size: Int64) -> Step {
+    /// The first part neither stored nor in a task's hands; the commit once every part is stored;
+    /// nil while the last parts are still in tasks.
+    public static func next(_ r: TransferRecord, size: Int64) -> Step? {
+        if let first = pending(r, size: size).first { return first }
+        return inFlight(r).isEmpty ? .commit : nil
+    }
+
+    /// Every part neither stored nor in a task's hands, in order.
+    public static func pending(_ r: TransferRecord, size: Int64) -> [Step] {
         let plan = partSize(r)
-        for i in stride(from: 1, through: count(r, size: size), by: 1) where r.parts?[String(i)] == nil {
-            return .part(n: i, offset: PartPlan.offset(i, partSize: plan), length: PartPlan.length(i, size: size, partSize: plan))
+        let busy = inFlight(r)
+        return stride(from: 1, through: count(r, size: size), by: 1)
+            .filter { r.parts?[String($0)] == nil && !busy.contains($0) }
+            .map { .part(n: $0, offset: PartPlan.offset($0, partSize: plan), length: PartPlan.length($0, size: size, partSize: plan)) }
+    }
+
+    /// The parts in tasks' hands.
+    public static func inFlight(_ r: TransferRecord) -> Set<Int> {
+        Set((r.partTasks ?? [:]).values.map(\.part))
+    }
+
+    /// Records that task `task` carries part `n` from the copy at `copy`.
+    public static func assign(_ r: inout TransferRecord, task: Int, part n: Int, copy: String) {
+        var tasks = r.partTasks ?? [:]
+        tasks[String(task)] = PartTask(part: n, copy: copy)
+        r.partTasks = tasks
+    }
+
+    /// The part task `task` carried, taken off the record; nil for a task the record doesn't know
+    /// (cancelled with the others, or from an earlier run).
+    public static func release(_ r: inout TransferRecord, task: Int) -> PartTask? {
+        guard var tasks = r.partTasks, let t = tasks.removeValue(forKey: String(task)) else { return nil }
+        r.partTasks = tasks.isEmpty ? nil : tasks
+        return t
+    }
+
+    /// Every temporary copy the record names: the parts' and the commit body's.
+    public static func copies(_ r: TransferRecord) -> [String] {
+        (r.partTasks ?? [:]).values.map(\.copy) + (r.remainderPath.map { [$0] } ?? [])
+    }
+
+    /// Free space kept after a hand-over: the copies must never fill the disk.
+    public static let diskMargin: Int64 = 256 * 1024 * 1024
+
+    /// Whether copies of `bytes` fit in `free` bytes of disk with the margin left over.
+    public static func handOverFits(bytes: Int64, free: Int64) -> Bool {
+        free - bytes >= diskMargin
+    }
+
+    /// The bytes still to copy and send: the parts neither stored nor in tasks.
+    public static func pendingBytes(_ r: TransferRecord, size: Int64) -> Int64 {
+        pending(r, size: size).reduce(0) { total, step in
+            if case .part(_, _, let length) = step { return total + length }
+            return total
         }
-        return .commit
     }
 
     /// The bytes of the parts stored.

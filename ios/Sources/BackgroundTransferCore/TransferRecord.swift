@@ -43,8 +43,12 @@ public struct TransferRecord: Codable, Equatable {
     /// Upload in parts: the commit (S3 completion, Azure block list) has been handed over. A lost
     /// answer isn't taken as success.
     public var committing: Bool?
-    /// Upload in parts: what the running task carries, a part or block number, or 0 for the commit.
+    /// Upload in parts: 0 while the commit's task runs (its body file is `remainderPath`).
     public var currentPart: Int?
+    /// Upload in parts (iOS): the tasks carrying parts or blocks, by task identifier, each with its
+    /// part number and the temporary copy it sends. One while the app is on screen; every remaining
+    /// part once the app has left it.
+    public var partTasks: [String: PartTask]?
 
     public init(id: String, direction: Direction, url: String, path: String) {
         self.id = id
@@ -72,6 +76,17 @@ public struct TransferRecord: Codable, Equatable {
         if let message = message { o["message"] = message }
         if let httpStatus = httpStatus { o["httpStatus"] = httpStatus }
         return o
+    }
+}
+
+/// A background task carrying one part or block, and the temporary copy of its range.
+public struct PartTask: Codable, Equatable {
+    public var part: Int
+    public var copy: String
+
+    public init(part: Int, copy: String) {
+        self.part = part
+        self.copy = copy
     }
 }
 

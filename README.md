@@ -208,17 +208,20 @@ await BackgroundTransfer.upload({
   mobile networks.
 - **S3-compatible services** (MinIO, Cloudflare R2, Backblaze B2, DigitalOcean Spaces) speak the
   same protocol and are expected to work; only MinIO is tested.
-- **iOS in the background:** each part is a background task of its own, and the next one is
-  handed over when the system wakes the app for the last one's end. With the app in the
-  background or closed, the system holds each of those wakes back, and doubles the wait every
-  time: about 1, 2, 4, 8 minutes and so on (seen on the iOS 27 simulator), until the app is next
-  on screen, which resets it. So a background upload of more than a few parts slows down a lot:
-  use big parts (e.g. 64 MiB or more, so a file is a handful of parts) where the time matters,
-  or `put` for files that fit in one request. With the app on screen the parts follow each other
-  at once. Android has no such wait.
+- **iOS in the background:** while the app is on screen the parts go one at a time. When it
+  leaves the screen, every remaining part is copied and handed to the background session at
+  once (its one connection per host still sends them one by one), and so is the rest when the
+  system wakes the app in the background with parts still to send. Otherwise each next part
+  would wait for a background wake, which the system holds back longer every time (about 1, 2,
+  4, 8 minutes...). The commit goes once every part is stored, whatever order their answers
+  come back in; in the background it waits for one more wake (about a minute on the iOS 27
+  simulator: 11 MiB in three parts was stored about 70 s after the app left the screen). A refused or dropped part stops the others and removes their copies.
 - **iOS disk:** a background session can only send whole files, so each part is sent from a
-  temporary copy of its byte range, made just before it is sent and deleted when its task ends:
-  about one part (8 MiB by default) of extra disk at a time.
+  temporary copy of its byte range, deleted when its task ends. On screen that is about one part
+  (8 MiB by default) of extra disk at a time; once the app leaves the screen, copies of everything
+  still to send, as for a part-way `firebase-resumable` upload. If that wouldn't leave 256 MiB
+  free, it carries on one part at a time instead (and says so in the transfer's `message`), with
+  the system's growing waits between parts.
 
 ### `azure-blocks`
 
@@ -251,8 +254,9 @@ await BackgroundTransfer.upload({
 - **SAS lifetime:** until the commit, including time spent waiting for the network. A user
   delegation SAS lasts at most 7 days; a service SAS as long as you set (keep it short, but longer
   than the upload may take).
-- **iOS:** as for `s3-multipart`: in the background the system's wait between blocks doubles
-  each time, so use big blocks; about one block of extra disk at a time.
+- **iOS:** as for `s3-multipart`: one block at a time on screen, every remaining block handed
+  over once the app leaves it, with temporary disk to match (or one at a time when the disk is
+  short).
 
 ### Checked here, and not
 

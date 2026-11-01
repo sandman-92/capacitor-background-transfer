@@ -138,4 +138,54 @@ final class PartsUploadTests: XCTestCase {
         XCTAssertEqual(PartsUpload.beforeStart(r, size: 20 * m),
                        .failed(reason: Reason.sizeMismatch, message: "partUrls holds 3 parts but a 20971520-byte file in 5242880-byte parts needs 4"))
     }
+
+    func testHandedOverPartsAreTrackedByTaskAndCommitWaitsForAll() {
+        var r = s3()
+        XCTAssertEqual(PartsUpload.pending(r, size: size).count, 3)
+        XCTAssertEqual(PartsUpload.pendingBytes(r, size: size), size)
+        PartsUpload.assign(&r, task: 7, part: 1, copy: "/c/1")
+        PartsUpload.assign(&r, task: 8, part: 2, copy: "/c/2")
+        PartsUpload.assign(&r, task: 9, part: 3, copy: "/c/3")
+        XCTAssertEqual(PartsUpload.inFlight(r), [1, 2, 3])
+        XCTAssertEqual(PartsUpload.pendingBytes(r, size: size), 0)
+        XCTAssertNil(PartsUpload.next(r, size: size), "no commit while parts are in tasks")
+        XCTAssertEqual(Set(PartsUpload.copies(r)), ["/c/1", "/c/2", "/c/3"])
+        // Answers in any order land against the part each task carried.
+        let third = PartsUpload.release(&r, task: 9)
+        XCTAssertEqual(third, PartTask(part: 3, copy: "/c/3"))
+        XCTAssertNil(PartsUpload.afterPart(&r, n: third!.part, status: 200, etag: "\"c\"", size: size))
+        XCTAssertNil(PartsUpload.release(&r, task: 42), "an unknown task carries nothing")
+        let first = PartsUpload.release(&r, task: 7)!
+        XCTAssertNil(PartsUpload.afterPart(&r, n: first.part, status: 200, etag: "\"a\"", size: size))
+        XCTAssertNil(PartsUpload.next(r, size: size))
+        let second = PartsUpload.release(&r, task: 8)!
+        XCTAssertNil(PartsUpload.afterPart(&r, n: second.part, status: 200, etag: "\"b\"", size: size))
+        XCTAssertNil(r.partTasks)
+        XCTAssertEqual(r.parts, ["1": "\"a\"", "2": "\"b\"", "3": "\"c\""])
+        XCTAssertEqual(PartsUpload.next(r, size: size), .commit)
+    }
+
+    func testAPartStillPendingIsHandedOverOnlyOnce() {
+        var r = s3()
+        r.parts = ["1": "\"a\""]
+        PartsUpload.assign(&r, task: 1, part: 2, copy: "/c/2")
+        XCTAssertEqual(PartsUpload.pending(r, size: size), [.part(n: 3, offset: 10 * m, length: m)])
+        XCTAssertEqual(PartsUpload.next(r, size: size), .part(n: 3, offset: 10 * m, length: m))
+        XCTAssertEqual(PartsUpload.pendingBytes(r, size: size), m)
+    }
+
+    func testTheHandOverNeedsTheRemainingBytesAndAMarginFree() {
+        let margin = PartsUpload.diskMargin
+        XCTAssertTrue(PartsUpload.handOverFits(bytes: 100 * m, free: 100 * m + margin))
+        XCTAssertFalse(PartsUpload.handOverFits(bytes: 100 * m, free: 100 * m + margin - 1))
+        XCTAssertFalse(PartsUpload.handOverFits(bytes: 0, free: margin - 1))
+    }
+
+    func testARecordWithHandedOverPartsSurvivesTheStore() throws {
+        var r = s3()
+        PartsUpload.assign(&r, task: 3, part: 2, copy: "/c/2")
+        let back = try JSONDecoder().decode(TransferRecord.self, from: JSONEncoder().encode(r))
+        XCTAssertEqual(back.partTasks, ["3": PartTask(part: 2, copy: "/c/2")])
+        XCTAssertNil(r.js["partTasks"])
+    }
 }

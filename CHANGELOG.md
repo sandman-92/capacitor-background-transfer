@@ -34,8 +34,11 @@ First version.
   - A commit whose answer was lost reports `session-closed` when the upload is started again,
     never `finished`. Their options are refused at once when missing or inconsistent, with the
     same words on the web, Android and iOS.
-  - iOS sends each part or block from a temporary copy of its range (about one part of extra
-    disk at a time); `put` sends the file in place.
+  - iOS sends each part or block from a temporary copy of its range: one at a time while the
+    app is on screen, and every remaining one handed to the background session at once when it
+    leaves (temporary disk equal to what's left to send; one at a time again when that wouldn't
+    leave 256 MiB free), so a background upload doesn't wait for a wake between parts. `put`
+    sends the file in place.
   - `test-servers/`: MinIO and Azurite in Docker with a harness that presigns URLs and injects
     faults; `npm run test:servers` runs the JVM and Swift tests against them; the example app's
     harness mode and `test-servers/e2e.mjs` run them end to end on an emulator or simulator.

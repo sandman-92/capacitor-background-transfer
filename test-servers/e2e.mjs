@@ -304,6 +304,34 @@ const cases = {
     assertProgress(await events(id, 'progress'), SIZE);
   },
 
+  /** Criteria 1 and 6: the app sent to the background part-way (and left there); stored, reported finished. */
+  async backgrounded(protocol) {
+    const id = `bg-${protocol}-${Date.now() % 100000}`;
+    const u = await setUp(protocol, id);
+    await launch();
+    await cleanSlate();
+    await harness('POST', '/throttle', { bytesPerSecond: 1.5 * MIB });
+    await command('upload', u.options);
+    await waitFor('bytes to move', async () => (await events(id, 'progress')).some((p) => p.bytes > MIB));
+    device.background();
+    const left = Date.now();
+    log(`  ${id}: in the background`);
+    await assertStored(u, 240000);
+    const seconds = Math.round((Date.now() - left) / 1000);
+    log(`  ${id}: stored ${seconds} s after the app left the screen`);
+    await harness('POST', '/throttle', { bytesPerSecond: 0 });
+    await sleep(2000);
+    const listed = (await launch()).find((t) => t.id === id);
+    const r = listed?.state === 'finished' ? listed : await waitState(id, ['finished', 'failed']);
+    assert(
+      r.state === 'finished' && r.bytes === SIZE,
+      `reported finished at launch (was ${r.state} ${r.reason || ''})`,
+    );
+    assertProgress(await events(id, 'progress'), SIZE);
+    assert(device.remainders().length === 0, 'no temporary copies are left');
+    return `stored ${seconds} s after leaving the screen`;
+  },
+
   /** Criteria 1 and 6: the app sent to the background part-way and its process killed. */
   async killed(protocol) {
     const id = `killed-${protocol}-${Date.now() % 100000}`;
@@ -316,6 +344,7 @@ const cases = {
     device.background();
     await sleep(2000);
     device.kill();
+    const killedAt = Date.now();
     log(`  ${id}: in the background, process killed`);
     await harness('POST', '/throttle', { bytesPerSecond: 3 * MIB });
     let alone = true;
@@ -335,7 +364,8 @@ const cases = {
       }
       await assertStored(u);
     }
-    if (alone) log(`  ${id}: stored with the app closed`);
+    if (alone)
+      log(`  ${id}: stored with the app closed, ${Math.round((Date.now() - killedAt) / 1000)} s after the kill`);
     const transfers = await launch();
     const listed = transfers.find((t) => t.id === id);
     const r = listed?.state === 'finished' ? listed : await waitState(id, ['finished', 'failed']);

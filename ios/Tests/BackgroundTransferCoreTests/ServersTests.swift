@@ -124,7 +124,7 @@ final class ServersTests: XCTestCase {
             if let stop = PartsUpload.afterProbe(&r, status: status, body: answer?.0, size: total) { return stop }
         }
         while true {
-            switch PartsUpload.next(r, size: total) {
+            switch PartsUpload.next(r, size: total)! {
             case .part(let n, let offset, let length):
                 let copy = dir.appendingPathComponent("remainders/\(UUID().uuidString)")
                 try Files.writeRange(of: file, from: offset, length: length, to: copy)
@@ -261,6 +261,47 @@ final class ServersTests: XCTestCase {
                 let after = try await requests(p).count
                 XCTAssertEqual(after, before, "nothing more is sent")
             }
+            _ = try await harness("POST", "/reset", [:])
+        }
+    }
+
+    /// As `TransferManager` does with the app off screen: every remaining part copied and handed
+    /// over at once, each task's part recorded, answers applied in whatever order they come back
+    /// (here the reverse), and the commit only once every part is stored.
+    func testHandedOverPartsLandAgainstTheirOwnNumbersInAnyOrder() async throws {
+        for p in [UploadProtocol.s3Multipart, .azureBlocks] {
+            var r = try await upload(p)
+            let total = try Files.fileSize(file)
+            if let probe = PartsUpload.probe(r) {
+                let answer = try await session.data(for: probe)
+                XCTAssertNil(PartsUpload.afterProbe(&r, status: (answer.1 as? HTTPURLResponse)?.statusCode, body: answer.0, size: total))
+            }
+            var answers: [(task: Int, status: Int, etag: String?)] = []
+            for (i, step) in PartsUpload.pending(r, size: total).enumerated() {
+                guard case .part(let n, let offset, let length) = step else { continue }
+                let copy = dir.appendingPathComponent("remainders/\(UUID().uuidString)")
+                try Files.writeRange(of: file, from: offset, length: length, to: copy)
+                PartsUpload.assign(&r, task: 100 + i, part: n, copy: copy.path)
+            }
+            XCTAssertNil(PartsUpload.next(r, size: total), "nothing more to hand over while every part is in a task")
+            for (task, t) in r.partTasks! {
+                let request = PartsUpload.partRequest(r, n: t.part, size: total)!
+                let (status, etag, _) = try await send(request, from: URL(fileURLWithPath: t.copy))!
+                answers.append((Int(task)!, status, etag))
+            }
+            for a in answers.sorted(by: { $0.task > $1.task }) {
+                let t = try XCTUnwrap(PartsUpload.release(&r, task: a.task))
+                try? FileManager.default.removeItem(atPath: t.copy)
+                XCTAssertNil(PartsUpload.afterPart(&r, n: t.part, status: a.status, etag: a.etag, size: total))
+                if r.partTasks != nil { XCTAssertNil(PartsUpload.next(r, size: total)) }
+            }
+            XCTAssertEqual(PartsUpload.next(r, size: total), .commit)
+            let (request, body) = PartsUpload.commitRequest(r, size: total)!
+            let copy = dir.appendingPathComponent("commit-\(p.rawValue)")
+            try body.write(to: copy)
+            let (status, _, answer) = try await send(request, from: copy)!
+            XCTAssertEqual(PartsUpload.afterCommit(&r, status: status, body: answer), .finished, p.rawValue)
+            try await assertStoredWhole(p)
             _ = try await harness("POST", "/reset", [:])
         }
     }
