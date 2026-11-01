@@ -185,7 +185,8 @@ function proxy(target, upstream) {
       else req.on('end', answer);
       return;
     }
-    const up = http.request(new URL(req.url, upstream), { method: req.method, headers: req.headers });
+    // A fresh upstream connection each time: a kept-alive one the server has closed would answer 502.
+    const up = http.request(new URL(req.url, upstream), { method: req.method, headers: req.headers, agent: false });
     // `Expect: 100-continue`: the server's go-ahead (or its early refusal) reaches the client as it would directly.
     up.on('continue', () => res.writeContinue());
     let cut = false;
@@ -196,9 +197,13 @@ function proxy(target, upstream) {
       up.destroy();
       req.socket.destroy();
     };
+    let answered = false;
     req.on('data', (chunk) => {
       if (cut) return;
       entry.bytes += chunk.length;
+      // After an early answer (a refusal before the body is in), the rest is read and dropped, as
+      // a server that keeps the connection does.
+      if (answered) return;
       up.write(chunk);
       if (fault?.action === 'cut' && entry.bytes >= (fault.after ?? 0)) return kill('cut');
       if (throttle > 0) {
@@ -209,6 +214,7 @@ function proxy(target, upstream) {
     req.on('end', () => !cut && up.end());
     req.on('error', () => kill('client gone'));
     up.on('response', (answer) => {
+      answered = true;
       entry.status = answer.statusCode;
       if (fault?.action === 'drop-answer') {
         // The server did the work; its answer never reaches the client.
@@ -220,7 +226,7 @@ function proxy(target, upstream) {
       answer.pipe(res);
     });
     up.on('error', (e) => {
-      if (cut) return;
+      if (cut || answered) return;
       entry.fault = `upstream: ${e.message}`;
       if (!res.headersSent) res.writeHead(502).end();
       else res.destroy();

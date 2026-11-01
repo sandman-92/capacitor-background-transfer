@@ -273,7 +273,7 @@ public class ServersTest {
     public void aRefusedCommitFailsAndSaysSo() throws Exception {
         Harness.post("/faults", onCommit(new JSONObject()).put("action", "status").put("status", 403));
         TransferRecord done = run(upload());
-        assertEquals(TransferRecord.FAILED, done.state);
+        assertEquals(done.message, TransferRecord.FAILED, done.state);
         assertEquals(TransferException.Reason.SESSION_REFUSED, done.reason);
         assertEquals(403, done.httpStatus);
         String which = switch (protocol) {

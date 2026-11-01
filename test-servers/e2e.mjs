@@ -308,7 +308,7 @@ const cases = {
     log(`  ${id}: network cut for 25 s`);
     await harness('POST', '/throttle', { bytesPerSecond: 0 });
     // The system may carry on by itself once the network is back; otherwise it is interrupted.
-    const after = await waitState(id, ['interrupted', 'finished', 'failed', 'queued'], 120000);
+    const after = await waitState(id, ['interrupted', 'finished', 'failed', 'queued'], 240000);
     if (after.state === 'interrupted') {
       log(`  ${id}: interrupted (${after.reason}), starting it again`);
       await command('upload', u.options);

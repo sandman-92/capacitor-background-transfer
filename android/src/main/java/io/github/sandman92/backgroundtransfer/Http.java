@@ -17,6 +17,16 @@ final class Http {
     /** Bytes written per piece, between progress reports and stop checks. */
     static final int PIECE = 256 * 1024;
     private static final int MAX_BODY = 64 * 1024;
+    /** A body write that makes no headway this long ends the request (as a dropped connection). */
+    static long STALL_MILLIS = 60_000;
+    private static final java.util.concurrent.ScheduledExecutorService WATCHDOG = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+        (r) -> {
+            Thread t = new Thread(r, "BackgroundTransfer write watchdog");
+            t.setDaemon(true);
+            return t;
+        }
+    );
+    private static final boolean ON_ANDROID = String.valueOf(System.getProperty("java.vm.vendor")).contains("Android");
 
     private Http() {}
 
@@ -84,16 +94,32 @@ final class Http {
                 if (!hasType && contentType != null) c.setRequestProperty("Content-Type", contentType);
                 c.setFixedLengthStreamingMode(size);
                 // A server that will refuse the request (an expired URL) says so before the body goes.
-                if (file != null && length > 0) c.setRequestProperty("Expect", "100-continue");
+                // The JDK's client needs this to read such an answer; Android's reads it anyway (earlyAnswer).
+                if (file != null && length > 0 && !ON_ANDROID) c.setRequestProperty("Expect", "100-continue");
             }
             c.connect();
             if (sending != null) sending.now();
             if (sendsBody) {
+                // A write has no timeout of its own: one that makes no headway is ended from outside.
+                final HttpURLConnection conn = c;
+                final long[] lastWrite = { System.currentTimeMillis() };
+                java.util.concurrent.ScheduledFuture<?> watch = WATCHDOG.scheduleWithFixedDelay(
+                    () -> {
+                        if (System.currentTimeMillis() - lastWrite[0] > STALL_MILLIS) conn.disconnect();
+                    },
+                    5,
+                    5,
+                    java.util.concurrent.TimeUnit.SECONDS
+                );
+                Written seen = (w) -> {
+                    lastWrite[0] = System.currentTimeMillis();
+                    if (written != null) written.bytes(w);
+                };
                 try (OutputStream out = c.getOutputStream()) {
                     if (body != null) {
                         out.write(body);
                     } else {
-                        writeRange(file, offset, length, out, progress, written);
+                        writeRange(file, offset, length, out, progress, seen);
                     }
                 } catch (IOException e) {
                     // A server that refuses a request (an expired URL, a bad signature) may answer
@@ -101,6 +127,8 @@ final class Http {
                     Answer early = earlyAnswer(c);
                     if (early != null) return early;
                     throw e;
+                } finally {
+                    watch.cancel(false);
                 }
             }
             int status = c.getResponseCode();
