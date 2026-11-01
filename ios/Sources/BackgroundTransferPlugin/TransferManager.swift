@@ -380,7 +380,7 @@ final class TransferManager: NSObject {
                     self.apply(stop, to: &now, httpStatus: status ?? 0)
                     return
                 }
-                now.bytes = PartsUpload.storedBytes(now, size: now.total)
+                now.bytes = min(PartsUpload.storedBytes(now, size: now.total), max(now.total - 1, 0))
                 self.sendNextPart(self.store.put(now))
             }
         }.resume()
@@ -490,7 +490,8 @@ final class TransferManager: NSObject {
         r.reason = nil
         r.message = nil
         r.httpStatus = nil
-        r.bytes = PartsUpload.storedBytes(r, size: r.total)
+        // Never the whole object before the commit is confirmed.
+        r.bytes = min(PartsUpload.storedBytes(r, size: r.total), max(r.total - 1, 0))
         r = store.put(r)
         listener?.transferChanged(r, event: "progress")
         sendNextPart(r)

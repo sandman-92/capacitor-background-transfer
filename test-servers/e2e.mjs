@@ -169,7 +169,11 @@ async function record(id) {
 
 /** The transfer's state events since the case started. */
 async function events(id, kind = 'stateChange') {
-  return (await reports()).filter((r) => r.kind === kind && r.transfer?.id === id).map((r) => r.transfer);
+  // In the order the app sent them: reports go one request each and can arrive out of order.
+  return (await reports())
+    .filter((r) => r.kind === kind && r.transfer?.id === id)
+    .sort((a, b) => a.at - b.at)
+    .map((r) => r.transfer);
 }
 
 // ---- Uploads as an app sets them up -------------------------------------------------------------
@@ -284,11 +288,12 @@ const cases = {
     await harness('POST', '/throttle', { bytesPerSecond: 3 * MIB });
     let alone = true;
     try {
-      await assertStored(u, 120000);
+      // iOS holds back each launch that starts the next part, doubling the wait: 1, 2, 4 minutes.
+      await assertStored(u, PLATFORM === 'ios' ? 540000 : 120000);
     } catch (e) {
       // Android restarts a job whose process died when it sees fit; opening the app schedules it at once.
       alone = false;
-      log(`  ${id}: not stored with the app closed after 120 s; opening it`);
+      log(`  ${id}: not stored with the app closed in time; opening it`);
       await launch();
       const r = await record(id);
       if (r?.state === 'interrupted') {
@@ -401,6 +406,14 @@ const cases = {
     if (protocol === 'put') {
       // The PUT is its own confirmation: sent again, it is answered.
       assert(r.state === 'finished', `finished after the PUT was sent again (was ${r.state} ${r.reason})`);
+    } else if (r.state === 'finished') {
+      // Only on the server's word: the commit was sent again (iOS resends a request whose
+      // connection dropped) and that answer arrived.
+      const { requests } = await harness('GET', `/requests?target=${u.target}`);
+      const commits = requests.filter((q) => (protocol === 's3-multipart' ? q.method === 'POST' : q.comp === 'blocklist' && q.method === 'PUT'));
+      const last = commits[commits.length - 1];
+      assert(commits.length >= 2 && last.status >= 200 && last.status < 300 && !last.fault, 'finished only after a resent commit was answered');
+      log(`  ${id}: the commit was resent and answered ${last.status}`);
     } else {
       assert(r.state === 'failed' && r.reason === 'session-closed', `failed session-closed (was ${r.state} ${r.reason})`);
       assert(!(await events(id)).some((t) => t.state === 'finished'), 'never reported finished');

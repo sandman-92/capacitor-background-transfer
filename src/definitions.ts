@@ -213,8 +213,10 @@ export interface TransferRecord {
   /**
    * Bytes the server holds (upload) or that have landed in `.part`
    * (download). For `s3-multipart` and `azure-blocks`, the parts or blocks
-   * stored plus the bytes of the one being sent; for `put`, the bytes sent so
-   * far in this attempt.
+   * stored plus the bytes of the one being sent (so it goes back to the
+   * stored parts' end when a part cut off part-way is sent again); for `put`,
+   * the bytes sent so far in this attempt. Below `total` until the server has
+   * confirmed the whole object.
    */
   bytes: number;
   /** Total size, or -1 until it is known. */
