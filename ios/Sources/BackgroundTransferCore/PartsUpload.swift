@@ -192,8 +192,45 @@ public enum PartsUpload {
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        for (k, v) in r.headers { request.setValue(v, forHTTPHeaderField: k) }
+        for (k, v) in isAzure(r) ? blockHeaders(r.headers) : r.headers { request.setValue(v, forHTTPHeaderField: k) }
         return request
+    }
+
+    /// The headers for an Azure block: all but the blob's properties (`x-ms-blob-content-type` and
+    /// the other `x-ms-blob-*` ones), which belong to the commit that creates the blob.
+    public static func blockHeaders(_ headers: [String: String]) -> [String: String] {
+        headers.filter { !$0.key.lowercased().hasPrefix("x-ms-blob-") }
+    }
+
+    /// Whether a restarted upload is the same one as `existing`, so what that one sent carries over:
+    /// the same URL and protocol, and for one in parts the same part or block size and file size too
+    /// (parts recorded for other ranges would otherwise be skipped as stored).
+    public static func carriesOver(_ existing: TransferRecord?, _ wanted: TransferRecord, fileSize: Int64) -> Bool {
+        guard let e = existing, e.url == wanted.url, e.protocol == wanted.protocol else { return false }
+        guard UploadProtocol.resolve(wanted.protocol)?.inParts == true else { return true }
+        return partSize(e) == partSize(wanted) && e.total == fileSize
+    }
+
+    /// What a task's end means once the app has asked to cancel the upload.
+    public enum AfterCancel: Equatable {
+        /// No cancel asked for: as usual.
+        case asUsual
+        /// The upload is cancelled: clean up and report `cancelled`.
+        case cancelled
+        /// A part stored after the cancel: nothing more is sent; the other tasks' ends report it.
+        case ignore
+    }
+
+    /// A task of an upload the app asked to cancel has ended. Only a task cancelled (by the
+    /// app's request) reads as the cancel; a part that landed anyway starts nothing more, and
+    /// cancels the upload if it was the last task out; a commit's answer still decides (the
+    /// server may have created the object); any other error is reported as it is.
+    public static func afterCancel(requested: Bool, isCommit: Bool, cancelledError: Bool, otherError: Bool,
+                                   othersInFlight: Bool) -> AfterCancel {
+        guard requested else { return .asUsual }
+        if cancelledError { return .cancelled }
+        if otherError || isCommit { return .asUsual }
+        return othersInFlight ? .ignore : .cancelled
     }
 
     /// After part `n`'s answer. Nil: it is stored, and recorded in `r.parts`.

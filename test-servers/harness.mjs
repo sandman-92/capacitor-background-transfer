@@ -101,7 +101,11 @@ function accountSas() {
 async function azure(method, path, query = '', body) {
   const url = `${AZURE_UPSTREAM}/${AZURE.account}/${AZURE.container}${path}?${query ? `${query}&` : ''}${accountSas()}`;
   const response = await fetch(url, { method, body, headers: { 'x-ms-version': AZURE.version } });
-  return { status: response.status, body: Buffer.from(await response.arrayBuffer()) };
+  return {
+    status: response.status,
+    body: Buffer.from(await response.arrayBuffer()),
+    contentType: response.headers.get('content-type'),
+  };
 }
 
 async function ensureContainer() {
@@ -356,7 +360,7 @@ const routes = {
   'GET /azure/blob': async (req, body, query) => {
     const r = await azure('GET', `/${query.get('name')}`);
     return r.status === 200
-      ? { exists: true, size: r.body.length, sha256: sha256(r.body) }
+      ? { exists: true, size: r.body.length, sha256: sha256(r.body), contentType: r.contentType }
       : { exists: false, status: r.status };
   },
   'GET /azure/blocks': async (req, body, query) => {

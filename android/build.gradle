@@ -40,6 +40,11 @@ android {
     }
     testOptions {
         unitTests.returnDefaultValues = true
+        unitTests.all {
+            // The tests against the local storage servers run only with BT_HARNESS set: a run with
+            // it isn't the same as one without, so Gradle mustn't reuse that one's results.
+            inputs.property('btHarness', System.getenv('BT_HARNESS') ?: '')
+        }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_21

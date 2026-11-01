@@ -194,8 +194,9 @@ final class TransferManager: NSObject {
             r.currentPart = nil
             if r.direction == .download {
                 r.bytes = (try? Files.fileSize(Files.partURL(for: URL(fileURLWithPath: r.path)))) ?? 0
-            } else if let existing = self.store.get(key: wanted.key), existing.url == wanted.url, existing.protocol == wanted.protocol,
-                      UploadProtocol.resolve(r.protocol)?.inParts == true {
+            } else if UploadProtocol.resolve(r.protocol)?.inParts == true,
+                      PartsUpload.carriesOver(self.store.get(key: wanted.key), r,
+                                              fileSize: (try? Files.fileSize(URL(fileURLWithPath: r.path))) ?? -2) {
                 // The same upload: what it sent, and whether its commit went, carry over.
                 r.parts = existing.parts
                 r.committing = existing.committing
@@ -215,12 +216,13 @@ final class TransferManager: NSObject {
                 let session = r.direction == .upload ? self.uploadSession : self.downloadSession
                 session.getAllTasks { tasks in
                     self.queue.async {
-                        let task = tasks.first { $0.taskDescription == key }
-                        if let task = task {
-                            task.cancel()
+                        // Every task of the transfer: an upload in parts may have several handed over.
+                        let mine = tasks.filter { $0.taskDescription == key && $0.state != .completed }
+                        if mine.isEmpty {
+                            guard var now = self.store.get(key: key), now.isActive else { return }
+                            self.markCancelled(&now)
                         } else {
-                            self.cancelling.remove(key)
-                            self.markCancelled(&r)
+                            mine.forEach { $0.cancel() }
                         }
                     }
                 }
@@ -427,6 +429,7 @@ final class TransferManager: NSObject {
     /// completion handler is held until the tasks are handed over, so the app isn't suspended half-way.
     private func sendNextPart(_ record: TransferRecord) {
         var r = record
+        guard !cancelling.contains(r.key) else { return } // Nothing more goes once the app has asked to cancel.
         let size = r.total
         r.taskIdentifier = nil
         guard let step = PartsUpload.next(r, size: size) else {
@@ -528,7 +531,8 @@ final class TransferManager: NSObject {
                 }
                 self.preparing.remove(r.key)
                 let removeCopies = { for p in parts { try? FileManager.default.removeItem(at: p.copy) } }
-                guard var now = self.store.get(key: r.key), now.isActive, now.queuedAt == r.queuedAt, now.currentPart != 0 else {
+                guard var now = self.store.get(key: r.key), now.isActive, now.queuedAt == r.queuedAt, now.currentPart != 0,
+                      !self.cancelling.contains(r.key) else {
                     // Cancelled, stopped or started again while copying.
                     removeCopies()
                     return
@@ -592,6 +596,12 @@ final class TransferManager: NSObject {
         }
         if n == 0 {
             r.currentPart = nil
+            if cancelling.contains(r.key) {
+                // Cancelled while the commit was out: only the server's confirmation outranks the cancel.
+                let outcome = PartsUpload.afterCommit(&r, status: status, body: body)
+                if outcome == .finished { apply(outcome, to: &r, httpStatus: status) } else { markCancelled(&r) }
+                return
+            }
             let outcome = PartsUpload.afterCommit(&r, status: status, body: body)
             apply(outcome, to: &r, httpStatus: status)
             return
@@ -748,11 +758,24 @@ final class TransferManager: NSObject {
         } else {
             guard r.taskIdentifier == task.taskIdentifier || r.taskIdentifier == nil else { return } // an older task
         }
-        let byUs = cancelling.remove(key) != nil
+        let byUs = cancelling.contains(key)
         r.taskIdentifier = nil
         if r.direction == .upload {
             if part <= 0 { removeRemainder(&r) }
-            if let error = error as NSError? {
+            let ns = error as NSError?
+            let cancelledError = ns?.domain == NSURLErrorDomain && ns?.code == NSURLErrorCancelled
+            switch PartsUpload.afterCancel(requested: byUs, isCommit: part == 0, cancelledError: cancelledError,
+                                           otherError: ns != nil && !cancelledError, othersInFlight: r.partTasks != nil) {
+            case .cancelled:
+                markCancelled(&r)
+                return
+            case .ignore:
+                store.put(r) // A part landed after the cancel: nothing more goes; the others' ends report it.
+                return
+            case .asUsual:
+                break
+            }
+            if let error = ns {
                 let (reason, resumable) = Reason.forError(error, cancelledByUs: byUs)
                 if reason == Reason.cancelled { markCancelled(&r); return }
                 if resumable { interrupt(&r, reason, error.localizedDescription) } else { fail(&r, reason, error.localizedDescription) }
@@ -896,6 +919,7 @@ final class TransferManager: NSObject {
     @discardableResult
     private func save(_ r: TransferRecord, event: String) -> TransferRecord {
         let stored = store.put(r)
+        if !stored.isActive { cancelling.remove(stored.key) }
         lastSaved[r.key] = Date()
         listener?.transferChanged(stored, event: event)
         return stored

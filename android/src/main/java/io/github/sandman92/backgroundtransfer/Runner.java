@@ -138,7 +138,7 @@ public final class Runner {
             } else if (UploadAdapters.PUT.equals(wanted.protocol)) {
                 // A PUT starts from the first byte every time.
                 wanted.bytes = 0;
-            } else if (existing != null && existing.url.equals(wanted.url) && existing.protocol.equals(wanted.protocol)) {
+            } else if (carriesOver(existing, wanted, new File(wanted.path).length())) {
                 wanted.bytes = existing.bytes;
                 wanted.total = existing.total;
                 // The same upload: what it sent, and whether its commit went, carry over.
@@ -149,6 +149,19 @@ public final class Runner {
             emit("stateChange", stored);
             return new Enqueued(stored, !isActive(wanted.direction));
         }
+    }
+
+    /**
+     * Whether a restarted upload is the same one as {@code existing}, so what that one sent carries
+     * over: the same URL and protocol, and for one in parts the same part or block size and file
+     * size too (parts recorded for other ranges would otherwise be skipped as stored).
+     */
+    static boolean carriesOver(TransferRecord existing, TransferRecord wanted, long fileSize) {
+        if (existing == null || !existing.url.equals(wanted.url) || !existing.protocol.equals(wanted.protocol)) return false;
+        if (UploadAdapters.S3_MULTIPART.equals(wanted.protocol) || UploadAdapters.AZURE_BLOCKS.equals(wanted.protocol)) {
+            return existing.partSize == wanted.partSize && existing.blockSize == wanted.blockSize && existing.total == fileSize;
+        }
+        return true;
     }
 
     /**

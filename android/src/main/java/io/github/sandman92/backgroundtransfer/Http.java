@@ -15,10 +15,13 @@ import java.util.Map;
 final class Http {
 
     /** Bytes written per piece, between progress reports and stop checks. */
-    static final int PIECE = 256 * 1024;
+    static final int PIECE = 64 * 1024;
     private static final int MAX_BODY = 64 * 1024;
-    /** A body write that makes no headway this long ends the request (as a dropped connection). */
-    static long STALL_MILLIS = 60_000;
+    /**
+     * A body write that makes no headway this long ends the request (as a dropped connection).
+     * Headway is seen per 64 KiB piece, so only links slower than about 1 KiB/s are taken as stalled.
+     */
+    static final long STALL_MILLIS = 60_000;
     private static final java.util.concurrent.ScheduledExecutorService WATCHDOG =
         java.util.concurrent.Executors.newSingleThreadScheduledExecutor((r) -> {
             Thread t = new Thread(r, "BackgroundTransfer write watchdog");

@@ -194,7 +194,8 @@ await BackgroundTransfer.upload({
 - **Options:** `partUrls` (required, at most 10,000, exactly as many as the file needs), `partSize`
   (default 8 MiB; at least 5 MiB when there is more than one part, at most 5 GiB), `listPartsUrl`
   (optional). On Android and iOS `upload()` also checks `partUrls` against the file's size.
-- **Resuming:** with `listPartsUrl`, a resumed upload asks S3 which parts it holds and sends the
+- **Resuming:** a restarted upload carries over what it sent only when its URL, part size and
+  file size are the same as before. With `listPartsUrl`, a resumed upload asks S3 which parts it holds and sends the
   rest, so you can also presign fresh URLs for the same `UploadId` and carry on where expired ones
   stopped. Without it, the plugin trusts its own record of the parts it sent.
 - **Completion:** finished only when S3 answers `CompleteMultipartUpload` with the completed
@@ -215,7 +216,10 @@ await BackgroundTransfer.upload({
   would wait for a background wake, which the system holds back longer every time (about 1, 2,
   4, 8 minutes...). The commit goes once every part is stored, whatever order their answers
   come back in; in the background it waits for one more wake (about a minute on the iOS 27
-  simulator: 11 MiB in three parts was stored about 70 s after the app left the screen). A refused or dropped part stops the others and removes their copies.
+  simulator: 11 MiB in three parts was stored about 70 s after the app left the screen). A
+  refused or dropped part, or `cancel()`, stops the others and removes their copies; once
+  `cancel()` is called nothing more is sent, and the upload is reported `cancelled` unless a
+  commit already out is confirmed by the server.
 - **iOS disk:** a background session can only send whole files, so each part is sent from a
   temporary copy of its byte range, deleted when its task ends. On screen that is about one part
   (8 MiB by default) of extra disk at a time; once the app leaves the screen, copies of everything
@@ -242,6 +246,10 @@ await BackgroundTransfer.upload({
   Without `r` the plugin resumes from its own record of the blocks it sent.
 - **Options:** `url` (must carry a `sig` parameter, and no `comp`), `blockSize` (default 8 MiB,
   at most 4000 MiB, and at most 50,000 blocks).
+- **The blob's properties:** a `Content-Type` in `headers` only labels each request's body, not
+  the blob. Pass the blob's own properties as `x-ms-blob-content-type` (and
+  `x-ms-blob-cache-control`, `x-ms-blob-content-disposition` and the other `x-ms-blob-*`
+  headers): the plugin sends those with the commit only, where Azure sets them.
 - **How it goes:** each block is sent with `Put Block` and an id made from the transfer's `id`, the
   file's size and the block size, so the same upload finds its blocks again and another file
   doesn't; a resumed upload reads the blob's uncommitted block list and sends only the blocks it
@@ -271,7 +279,7 @@ the real services, S3's 200-with-an-error answers, R2 and B2).
 | | Android 14+ (API 34+) | Android 6 to 13 | iOS |
 |---|---|---|---|
 | Mechanism | A user-initiated data transfer job, one per direction | A WorkManager worker promoted to a `dataSync` foreground service, one per direction | A background `URLSession` per direction, one connection per host |
-| Upload | Read from the file in place: 4 MiB chunks (`firebase-resumable`), each part or block, or the whole file (`put`) | Same | `firebase-resumable`: the whole file in one request when the server holds nothing, otherwise a temporary copy of the remaining bytes (a background session can't send a byte range). `s3-multipart`, `azure-blocks`: each part or block from a temporary copy of its range, one at a time. `put`: the file in place. Copies are deleted when their task ends |
+| Upload | Read from the file in place: 4 MiB chunks (`firebase-resumable`), each part or block, or the whole file (`put`) | Same | `firebase-resumable`: the whole file in one request when the server holds nothing, otherwise a temporary copy of the remaining bytes (a background session can't send a byte range). `s3-multipart`, `azure-blocks`: each part or block from a temporary copy of its range, one at a time while the app is on screen and every remaining one handed over at once when it leaves (the session still sends them one by one). `put`: the file in place. Copies are deleted when their task ends |
 | Download | Streamed to `<path>.part`, resumed with `Range` | Same | A background download task, resumed from the system's resume data or with `Range`. While it runs the bytes are in the system's own temporary file |
 | Locked, Doze, removed from Recents | Carries on | Carries on | Carries on in the system's transfer daemon, also after the app's process ends |
 | Network drops with the app off-screen | The system stops the job and runs it again when the network is back | Reported `interrupted`: a foreground service can't be started again from the background, so start the transfer again at the next launch | The system often retries by itself; if it gives up, reported `interrupted` |
@@ -507,14 +515,14 @@ What the plugin knows about one transfer.
 
 #### UploadOptions
 
-| Prop               | Type                                                      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------ | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`url`**          | <code>string</code>                                       | Where the upload goes, which depends on `protocol`: - `firebase-resumable`: the session URL of an upload you have already started (the `X-Goog-Upload-URL` from its `start`). The plugin asks it how many bytes it holds, sends the rest and finalizes. - `put`: the URL to `PUT` the whole file to. - `s3-multipart`: the presigned `CompleteMultipartUpload` URL (`POST`, with the upload's `uploadId`). - `azure-blocks`: the blob's SAS URL (with its `sig` parameter). |
-| **`protocol`**     | <code><a href="#uploadprotocol">UploadProtocol</a></code> | The protocol the upload speaks. Default `firebase-resumable`. An unknown value is refused.                                                                                                                                                                                                                                                                                                                                                                                  |
-| **`partUrls`**     | <code>string[]</code>                                     | `s3-multipart` only, and required there: the presigned `UploadPart` URL of every part, part 1 first. There must be exactly as many as the file needs in `partSize` parts (at most 10,000). They must stay valid until the last part is sent.                                                                                                                                                                                                                                |
-| **`partSize`**     | <code>number</code>                                       | `s3-multipart` only: the size of every part but the last, in bytes. Default 8 MiB. At least 5 MiB when there is more than one part, at most 5 GiB.                                                                                                                                                                                                                                                                                                                          |
-| **`listPartsUrl`** | <code>string</code>                                       | `s3-multipart` only, optional: the presigned `ListParts` URL (`GET`, with the `uploadId`). When it is given, a resumed upload asks the server which parts it holds instead of trusting the plugin's own record, so a part the server lost is sent again and fresh URLs for the same upload carry on where the old ones stopped.                                                                                                                                             |
-| **`blockSize`**    | <code>number</code>                                       | `azure-blocks` only: the size of every block but the last, in bytes. Default 8 MiB, at most 4000 MiB, and at most 50,000 blocks.                                                                                                                                                                                                                                                                                                                                            |
+| Prop               | Type                                                      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`url`**          | <code>string</code>                                       | Where the upload goes, which depends on `protocol`: - `firebase-resumable`: the session URL of an upload you have already started (the `X-Goog-Upload-URL` from its `start`). The plugin asks it how many bytes it holds, sends the rest and finalizes. - `put`: the URL to `PUT` the whole file to. - `s3-multipart`: the presigned `CompleteMultipartUpload` URL (`POST`, with the upload's `uploadId`). - `azure-blocks`: the blob's SAS URL (with its `sig` parameter). The blob's properties go in `headers` as `x-ms-blob-content-type` and the other `x-ms-blob-*` headers: they are sent with the commit only. |
+| **`protocol`**     | <code><a href="#uploadprotocol">UploadProtocol</a></code> | The protocol the upload speaks. Default `firebase-resumable`. An unknown value is refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **`partUrls`**     | <code>string[]</code>                                     | `s3-multipart` only, and required there: the presigned `UploadPart` URL of every part, part 1 first. There must be exactly as many as the file needs in `partSize` parts (at most 10,000). They must stay valid until the last part is sent.                                                                                                                                                                                                                                                                                                                                                                           |
+| **`partSize`**     | <code>number</code>                                       | `s3-multipart` only: the size of every part but the last, in bytes. Default 8 MiB. At least 5 MiB when there is more than one part, at most 5 GiB.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **`listPartsUrl`** | <code>string</code>                                       | `s3-multipart` only, optional: the presigned `ListParts` URL (`GET`, with the `uploadId`). When it is given, a resumed upload asks the server which parts it holds instead of trusting the plugin's own record, so a part the server lost is sent again and fresh URLs for the same upload carry on where the old ones stopped.                                                                                                                                                                                                                                                                                        |
+| **`blockSize`**    | <code>number</code>                                       | `azure-blocks` only: the size of every block but the last, in bytes. Default 8 MiB, at most 4000 MiB, and at most 50,000 blocks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 
 #### DownloadOptions
@@ -598,7 +606,10 @@ Why a transfer stopped without finishing.
   a presigned URL or SAS token expired or lacks a permission (403). `message` names the
   request that was refused (a part, a block, the `PUT`, or the commit).
 - `session-expired`: the upload session or download URL is gone (HTTP 404
-  or 410), e.g. an S3 multipart upload that was aborted. Start a new session.
+  or 410), e.g. an S3 multipart upload that was aborted, found out while
+  sending a part or asking ListParts. Start a new session. (An S3 upload
+  found gone only at the completion reports `session-closed`: it may have
+  been completed.)
 - `session-closed`: the upload can't be confirmed from here. For `firebase-resumable`, the
   session was already closed when the upload started; that isn't proof the object was accepted
   (the Firebase Storage emulator closes a session whose finalize its security rules refused).
@@ -640,7 +651,15 @@ and a small harness in front of them (`harness.mjs`, Node's standard library onl
 API on port 8790 creates multipart uploads, presigns part URLs and SAS URLs, checks what the
 servers stored, and injects faults; the S3 (8791) and Azure (8792) endpoints it hands out go
 through a recording proxy that can cut a request part-way, refuse it, swallow its answer, slow it
-down or drop every connection for a while. The containers are memory-limited.
+down or drop every connection for a while. The containers are memory-limited, their images
+pinned, and their ports published on `127.0.0.1` only.
+
+`npm run test:servers` needs Docker running, a JDK 21 (`JAVA_HOME`) and the Android SDK
+(`ANDROID_HOME`, or `sdk.dir` in `android/local.properties`), and on macOS Swift; it refuses to
+start without them. It reruns the JUnit suite even when Gradle holds results from a run without
+the servers, and says how many of `ServersTest`'s cases ran. In CI the JUnit suite runs against
+the compose servers on Linux; the Swift suite runs on macOS, which has no Docker, against MinIO
+built from its repository at a pinned release, Azurite from npm and the harness.
 
 ```bash
 npm run servers:up      # start them (docker compose up --wait)
@@ -669,7 +688,7 @@ commit, and checks the stored objects and what the app reports.
 `ios/Sources/BackgroundTransferCore` and `ios/Tests/BackgroundTransferCoreTests`, because
 Capacitor's Swift package only ships iOS binaries. The Android tests run the uploader and
 downloader against a local MockWebServer. `example-app/` is a small app for trying the plugin by
-hand; see its README. The upload protocols' tests against real servers are described below.
+hand; see its README. The upload protocols' tests against real servers are described above, under [Local storage servers](#local-storage-servers).
 
 Things only a real device can show: locking an iPhone mid-transfer, Low Power Mode, an Android
 restart part-way through (the job is persisted), and makers' own battery managers.

@@ -74,13 +74,16 @@ export function checkUploadOptions(options: UploadOptions): UploadOptions {
   return { ...checked, protocol };
 }
 
-/** A blob URL with a SAS token: a `sig` parameter, and no `comp` (the plugin adds its own). */
+/**
+ * A blob URL with a SAS token: a non-empty `sig` parameter, and no `comp` (the plugin adds its
+ * own). Parameter names are compared as written, as the native sides do.
+ */
 function isSasUrl(url: string): boolean {
   const query = url.split('#')[0].split('?')[1];
   if (!query) return false;
-  const names = query.split('&').map((p) => decodeURIComponent(p.split('=')[0]));
-  const sig = query.split('&').find((p) => p.startsWith('sig='));
-  return sig !== undefined && sig.length > 'sig='.length && !names.includes('comp');
+  const params = query.split('&');
+  const names = params.map((p) => p.split('=')[0]);
+  return params.some((p) => p.startsWith('sig=') && p.length > 'sig='.length) && !names.includes('comp');
 }
 
 /** `file:///a/b%20c.mp4` → `/a/b c.mp4`; absolute paths pass through. */

@@ -97,6 +97,10 @@ describe('checkUploadOptions', () => {
     expect(checkUploadOptions(options).protocol).toBe(protocol);
   });
 
+  it('accepts a SAS URL with a stray % in another parameter, as the native sides do', () => {
+    expect(checkUploadOptions({ ...azure, url: `${sas}&x=%` }).protocol).toBe('azure-blocks');
+  });
+
   it('accepts a part size of 5 MiB, a single part of any size, a ListParts URL and a block size', () => {
     expect(
       checkUploadOptions({ ...s3, partSize: 5 * MIB, listPartsUrl: 'https://s3.example.com/b/k?uploadId=x' }).partSize,
@@ -133,6 +137,7 @@ describe('checkUploadOptions', () => {
     ],
     [{ ...azure, url: 'https://acct.blob.core.windows.net/c/blob.bin?sv=2021&sig=' }, 'url must be a blob SAS URL'],
     [{ ...azure, url: `${sas}&comp=block` }, 'url must be a blob SAS URL'],
+    [{ ...azure, url: 'https://acct/c/blob?sv=1&%E0%A4%A=x' }, 'url must be a blob SAS URL (with a sig parameter)'],
     [{ ...azure, blockSize: 4000 * MIB + 1 }, 'blockSize must be a whole number of bytes up to 4000 MiB'],
     [{ ...azure, blockSize: -1 }, 'blockSize must be a whole number of bytes up to 4000 MiB'],
   ])('refuses %#', (options, message) => {

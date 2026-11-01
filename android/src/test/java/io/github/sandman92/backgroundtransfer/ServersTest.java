@@ -361,6 +361,16 @@ public class ServersTest {
         assertTrue(refused.message, refused.message.contains("block 1 of 3"));
     }
 
+    @Test
+    public void azureGivesTheBlobItsPropertiesWithTheCommitOnly() throws Exception {
+        Assume.assumeTrue(protocol.equals(UploadAdapters.AZURE_BLOCKS));
+        TransferRecord r = upload();
+        r.headers.put("x-ms-blob-content-type", "video/mp4");
+        assertEquals(TransferRecord.FINISHED, run(r).state);
+        assertStoredWhole();
+        assertEquals("video/mp4", stored().getString("contentType"));
+    }
+
     private static String sha256(byte[] data) throws Exception {
         byte[] d = MessageDigest.getInstance("SHA-256").digest(data);
         StringBuilder b = new StringBuilder();

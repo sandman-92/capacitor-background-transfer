@@ -9,8 +9,9 @@ name: background-transfer-test-servers
 
 services:
   minio:
-    # MinIO's own images are no longer published; Chainguard builds it from source.
-    image: cgr.dev/chainguard/minio:latest
+    # MinIO's own images are no longer published; Chainguard builds it from source. Pinned by
+    # digest (MinIO RELEASE.2026-10-23T20-06-51Z); bump it deliberately.
+    image: cgr.dev/chainguard/minio@sha256:0a01100085e30fb08d2f39e39c9f5c9d83a95707f220b007d813b690cd41622d
     # Objects go to the container's own disk, not memory; `docker compose down` discards them.
     command: server /data --quiet
     environment:
@@ -19,22 +20,23 @@ services:
     mem_limit: 512m
 
   azurite:
-    image: mcr.microsoft.com/azure-storage/azurite:latest
+    image: mcr.microsoft.com/azure-storage/azurite:3.37.0
     command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --location /data --skipApiVersionCheck --loose
     mem_limit: 512m
 
   harness:
-    image: node:22-alpine
+    image: node:22.20-alpine
     command: node /harness/harness.mjs
     volumes:
       - ./harness.mjs:/harness/harness.mjs:ro
     environment:
       S3_UPSTREAM: http://minio:9000
       AZURE_UPSTREAM: http://azurite:10000
+    # This machine only; the Android emulator's 10.0.2.2 and the iOS simulator reach it there.
     ports:
-      - "8790:8790"
-      - "8791:8791"
-      - "8792:8792"
+      - "127.0.0.1:8790:8790"
+      - "127.0.0.1:8791:8791"
+      - "127.0.0.1:8792:8792"
     mem_limit: 192m
     depends_on:
       - minio

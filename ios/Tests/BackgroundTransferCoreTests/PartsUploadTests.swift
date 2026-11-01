@@ -188,4 +188,49 @@ final class PartsUploadTests: XCTestCase {
         XCTAssertEqual(back.partTasks, ["3": PartTask(part: 2, copy: "/c/2")])
         XCTAssertNil(r.js["partTasks"])
     }
+
+    func testOnlyACancelledTaskReadsAsTheAppsCancel() {
+        typealias A = PartsUpload.AfterCancel
+        func after(_ requested: Bool, commit: Bool = false, cancelled: Bool = false, other: Bool = false, others: Bool = false) -> A {
+            PartsUpload.afterCancel(requested: requested, isCommit: commit, cancelledError: cancelled, otherError: other, othersInFlight: others)
+        }
+        XCTAssertEqual(after(false, cancelled: true), .asUsual, "a cancel nobody asked for is the system's")
+        XCTAssertEqual(after(true, cancelled: true, others: true), .cancelled)
+        XCTAssertEqual(after(true, others: true), .ignore, "a part that landed anyway starts nothing more")
+        XCTAssertEqual(after(true, others: false), .cancelled, "the last task out reports the cancel")
+        XCTAssertEqual(after(true, commit: true), .asUsual, "a commit's answer still decides")
+        XCTAssertEqual(after(true, other: true, others: true), .asUsual, "a refusal is reported as it is")
+    }
+
+    func testPartsCarryOverOnlyForTheSameRanges() {
+        let existing = { () -> TransferRecord in var e = self.s3(); e.total = self.size; e.parts = ["1": "\"a\""]; return e }()
+        XCTAssertTrue(PartsUpload.carriesOver(existing, s3(), fileSize: size))
+        var otherSize = s3()
+        otherSize.partSize = 6 * m
+        XCTAssertFalse(PartsUpload.carriesOver(existing, otherSize, fileSize: size), "another part size covers other ranges")
+        XCTAssertFalse(PartsUpload.carriesOver(existing, s3(), fileSize: size + 1), "the file changed")
+        var otherUrl = s3()
+        otherUrl.url = "http://s3/b/k?uploadId=y"
+        XCTAssertFalse(PartsUpload.carriesOver(existing, otherUrl, fileSize: size))
+        XCTAssertFalse(PartsUpload.carriesOver(nil, s3(), fileSize: size))
+        var a = azure()
+        a.total = size
+        var b = azure()
+        b.blockSize = 4 * m
+        XCTAssertFalse(PartsUpload.carriesOver(a, b, fileSize: size))
+        XCTAssertTrue(PartsUpload.carriesOver(a, azure(), fileSize: size))
+    }
+
+    func testTheBlobsPropertiesGoOnlyWithTheCommit() {
+        var r = azure()
+        r.headers = ["x-ms-blob-content-type": "video/mp4", "X-Custom": "1"]
+        let block = PartsUpload.partRequest(r, n: 1, size: size)!
+        XCTAssertNil(block.value(forHTTPHeaderField: "x-ms-blob-content-type"))
+        XCTAssertEqual(block.value(forHTTPHeaderField: "X-Custom"), "1")
+        let commit = PartsUpload.commitRequest(r, size: size)!.0
+        XCTAssertEqual(commit.value(forHTTPHeaderField: "x-ms-blob-content-type"), "video/mp4")
+        var s = s3()
+        s.headers = ["x-ms-blob-content-type": "kept"]
+        XCTAssertEqual(PartsUpload.partRequest(s, n: 1, size: size)?.value(forHTTPHeaderField: "x-ms-blob-content-type"), "kept")
+    }
 }

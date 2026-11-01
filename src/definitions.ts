@@ -30,7 +30,10 @@ export type TransferState = 'queued' | 'running' | 'interrupted' | 'finished' | 
  *   a presigned URL or SAS token expired or lacks a permission (403). `message` names the
  *   request that was refused (a part, a block, the `PUT`, or the commit).
  * - `session-expired`: the upload session or download URL is gone (HTTP 404
- *   or 410), e.g. an S3 multipart upload that was aborted. Start a new session.
+ *   or 410), e.g. an S3 multipart upload that was aborted, found out while
+ *   sending a part or asking ListParts. Start a new session. (An S3 upload
+ *   found gone only at the completion reports `session-closed`: it may have
+ *   been completed.)
  * - `session-closed`: the upload can't be confirmed from here. For `firebase-resumable`, the
  *   session was already closed when the upload started; that isn't proof the object was accepted
  *   (the Firebase Storage emulator closes a session whose finalize its security rules refused).
@@ -161,7 +164,9 @@ export interface UploadOptions extends TransferOptionsBase {
    * - `put`: the URL to `PUT` the whole file to.
    * - `s3-multipart`: the presigned `CompleteMultipartUpload` URL (`POST`,
    *   with the upload's `uploadId`).
-   * - `azure-blocks`: the blob's SAS URL (with its `sig` parameter).
+   * - `azure-blocks`: the blob's SAS URL (with its `sig` parameter). The
+   *   blob's properties go in `headers` as `x-ms-blob-content-type` and the
+   *   other `x-ms-blob-*` headers: they are sent with the commit only.
    */
   url: string;
   /**

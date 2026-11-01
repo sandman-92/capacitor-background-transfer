@@ -80,7 +80,7 @@ final class AzureBlockUploader implements UploadAdapter {
             Http.Answer a = Http.send(
                 "PUT",
                 Http.withQuery(r.url, "comp=block&blockid=" + encode(ids.get(n - 1))),
-                r.headers,
+                blockHeaders(r.headers),
                 "application/octet-stream",
                 file,
                 Parts.offset(n, blockSize),
@@ -123,6 +123,19 @@ final class AzureBlockUploader implements UploadAdapter {
         r.committing = false;
         progress.saveState();
         throw TransferException.forStatus(a.status, "commit (Put Block List)");
+    }
+
+    /**
+     * The headers for a block: all but the blob's properties ({@code x-ms-blob-content-type} and
+     * the other {@code x-ms-blob-*} ones), which belong to the commit that creates the blob.
+     */
+    static Map<String, String> blockHeaders(Map<String, String> headers) {
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        if (headers == null) return out;
+        for (Map.Entry<String, String> h : headers.entrySet()) {
+            if (!h.getKey().toLowerCase(java.util.Locale.ROOT).startsWith("x-ms-blob-")) out.put(h.getKey(), h.getValue());
+        }
+        return out;
     }
 
     private static String encode(String id) {
