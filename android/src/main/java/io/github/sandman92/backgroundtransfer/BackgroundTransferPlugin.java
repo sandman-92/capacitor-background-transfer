@@ -6,8 +6,11 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import java.io.File;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -99,6 +102,11 @@ public class BackgroundTransferPlugin extends Plugin implements Runner.Events {
                 return;
             }
             r.protocol = protocol;
+            String refused = readProtocolOptions(call, r, path);
+            if (refused != null) {
+                call.reject(refused);
+                return;
+            }
         }
         r.id = id;
         r.direction = direction;
@@ -131,6 +139,50 @@ public class BackgroundTransferPlugin extends Plugin implements Runner.Events {
                 call.reject("could not start the " + direction + ": " + e.getMessage(), e);
             }
         });
+    }
+
+    /**
+     * Reads {@code partUrls}, {@code partSize}, {@code listPartsUrl} and {@code blockSize} into
+     * {@code r}, and returns what is wrong with them (as the JavaScript side words it), or null.
+     */
+    static String readProtocolOptions(PluginCall call, TransferRecord r, String path) {
+        JSONObject data = call.getData();
+        List<Object> partUrls = null;
+        JSONArray urls = data.optJSONArray("partUrls");
+        if (urls != null) {
+            partUrls = new ArrayList<>();
+            for (int i = 0; i < urls.length(); i++) partUrls.add(urls.opt(i));
+        } else if (data.has("partUrls") && !data.isNull("partUrls")) {
+            partUrls = new ArrayList<>(); // Not an array: refused as missing.
+        }
+        Double partSize = number(data, "partSize");
+        Double blockSize = number(data, "blockSize");
+        Object listPartsUrl = data.isNull("listPartsUrl") ? null : data.opt("listPartsUrl");
+        if (data.has("partSize") && !data.isNull("partSize") && partSize == null) partSize = Double.NaN;
+        if (data.has("blockSize") && !data.isNull("blockSize") && blockSize == null) blockSize = Double.NaN;
+        String refused = UploadOptionsCheck.check(r.protocol, r.url, partUrls, partSize, listPartsUrl, blockSize);
+        if (refused != null) return refused;
+        if (partUrls != null) for (Object u : partUrls) r.partUrls.add((String) u);
+        r.partSize = partSize != null ? partSize.longValue() : 0;
+        r.listPartsUrl = (String) listPartsUrl;
+        r.blockSize = blockSize != null ? blockSize.longValue() : 0;
+        File file = new File(path);
+        if (file.isFile()) {
+            // A missing file is reported when the upload runs (file-missing), as for every protocol.
+            return UploadOptionsCheck.checkSize(
+                r.protocol,
+                r.partUrls.size(),
+                r.partSize > 0 ? r.partSize : UploadOptionsCheck.DEFAULT_PART_SIZE,
+                r.blockSize > 0 ? r.blockSize : UploadOptionsCheck.DEFAULT_PART_SIZE,
+                file.length()
+            );
+        }
+        return null;
+    }
+
+    private static Double number(JSONObject data, String name) {
+        Object v = data.opt(name);
+        return v instanceof Number ? ((Number) v).doubleValue() : null;
     }
 
     @PluginMethod

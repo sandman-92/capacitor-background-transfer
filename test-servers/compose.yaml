@@ -1,0 +1,48 @@
+# Local storage servers for the upload adapters' tests: MinIO (S3) and Azurite (Azure Blob),
+# with their well-known development credentials, and the harness in front of them (harness.mjs).
+# Only the harness's ports are published:
+#   8790  control API (makes uploads, presigns URLs, checks objects, injects faults)
+#   8791  S3 endpoint, a recording proxy in front of MinIO
+#   8792  Azure Blob endpoint, a recording proxy in front of Azurite
+# Start with `npm run servers:up`, stop with `npm run servers:down`.
+name: background-transfer-test-servers
+
+services:
+  minio:
+    # MinIO's own images are no longer published; Chainguard builds it from source.
+    image: cgr.dev/chainguard/minio:latest
+    command: server /data --quiet
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    tmpfs:
+      - /data
+    mem_limit: 512m
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --inMemoryPersistence --skipApiVersionCheck --loose
+    mem_limit: 384m
+
+  harness:
+    image: node:22-alpine
+    command: node /harness/harness.mjs
+    volumes:
+      - ./harness.mjs:/harness/harness.mjs:ro
+    environment:
+      S3_UPSTREAM: http://minio:9000
+      AZURE_UPSTREAM: http://azurite:10000
+    ports:
+      - "8790:8790"
+      - "8791:8791"
+      - "8792:8792"
+    mem_limit: 192m
+    depends_on:
+      - minio
+      - azurite
+    # Healthy once MinIO and Azurite answer too.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8790/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
