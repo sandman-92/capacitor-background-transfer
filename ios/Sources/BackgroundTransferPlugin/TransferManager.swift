@@ -194,9 +194,8 @@ final class TransferManager: NSObject {
             r.currentPart = nil
             if r.direction == .download {
                 r.bytes = (try? Files.fileSize(Files.partURL(for: URL(fileURLWithPath: r.path)))) ?? 0
-            } else if UploadProtocol.resolve(r.protocol)?.inParts == true,
-                      PartsUpload.carriesOver(self.store.get(key: wanted.key), r,
-                                              fileSize: (try? Files.fileSize(URL(fileURLWithPath: r.path))) ?? -2) {
+            } else if UploadProtocol.resolve(r.protocol)?.inParts == true, let existing = self.store.get(key: wanted.key),
+                      PartsUpload.carriesOver(existing, r, fileSize: (try? Files.fileSize(URL(fileURLWithPath: r.path))) ?? -2) {
                 // The same upload: what it sent, and whether its commit went, carry over.
                 r.parts = existing.parts
                 r.committing = existing.committing

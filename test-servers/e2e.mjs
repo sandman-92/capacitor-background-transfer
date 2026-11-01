@@ -332,6 +332,39 @@ const cases = {
     return `stored ${seconds} s after leaving the screen`;
   },
 
+  /** cancel() with every part handed over (iOS): cancelled, nothing more sent, no copies left. */
+  async cancelled(protocol) {
+    if (protocol === 'put') return 'skip';
+    const id = `cancel-${protocol}-${Date.now() % 100000}`;
+    const u = await setUp(protocol, id);
+    await launch();
+    await cleanSlate();
+    await harness('POST', '/throttle', { bytesPerSecond: 0.5 * MIB });
+    await command('upload', u.options);
+    await waitFor('bytes to move', async () => (await events(id, 'progress')).some((p) => p.bytes > MIB / 2));
+    device.background();
+    await sleep(4000);
+    // Back on screen without ending the app: the parts stay handed over.
+    device.launch();
+    await sleep(2000);
+    await command('cancel', { id, direction: 'upload' });
+    const r = await waitState(id, ['cancelled', 'finished', 'failed', 'interrupted'], 60000);
+    assert(r.state === 'cancelled' && r.reason === 'cancelled', `cancelled (was ${r.state} ${r.reason || ''})`);
+    await harness('POST', '/throttle', { bytesPerSecond: 0 });
+    await sleep(8000);
+    const after = await record(id);
+    assert(after.state === 'cancelled', `still cancelled (now ${after.state} ${after.reason || ''})`);
+    const { requests } = await harness('GET', `/requests?target=${u.target}`);
+    const commits = requests.filter((q) =>
+      protocol === 's3-multipart' ? q.method === 'POST' : q.comp === 'blocklist' && q.method === 'PUT',
+    );
+    assert(commits.length === 0, 'no commit was sent');
+    assert(!(await stored(u)).exists, 'nothing is stored');
+    assert(device.remainders().length === 0, 'no temporary copies are left');
+    const sent = requests.filter((q) => q.method === 'PUT').length;
+    return `${sent} part requests reached the server before the cancel took`;
+  },
+
   /** Criteria 1 and 6: the app sent to the background part-way and its process killed. */
   async killed(protocol) {
     const id = `killed-${protocol}-${Date.now() % 100000}`;
