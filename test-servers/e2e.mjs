@@ -419,8 +419,17 @@ const cases = {
     );
     await command('cancel', { id: id2, direction: 'upload' });
     const second = await waitState(id2, ['cancelled', 'finished', 'failed', 'interrupted'], 60000);
-    assert(second.state === 'cancelled', `cancelled (was ${second.state} ${second.reason || ''})`);
     await assertStored(v);
+    if (second.state === 'finished') {
+      // Only on the server's word: iOS resent the commit whose connection dropped, and Azure
+      // answered the repeated Put Block List with 201.
+      const commits = (await harness('GET', `/requests?target=${v.target}`)).requests.filter(isCommit);
+      const last = commits[commits.length - 1];
+      assert(commits.length >= 2 && last.status === 201 && !last.fault, `finished only on a resent commit's 201`);
+      log(`  ${id2}: the commit was resent after the cancel and answered 201: finished`);
+      return 'a resent commit was confirmed after the cancel';
+    }
+    assert(second.state === 'cancelled', `cancelled (was ${second.state} ${second.reason || ''})`);
     await command('upload', v.options);
     const again = await waitState(id2, ['failed', 'finished'], 60000);
     assert(

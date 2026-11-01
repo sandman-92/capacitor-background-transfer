@@ -604,7 +604,11 @@ final class TransferManager: NSObject {
             if cancelling.contains(r.key) {
                 // Cancelled while the commit was out: only the server's confirmation outranks the cancel.
                 let outcome = PartsUpload.afterCommit(&r, status: status, body: body)
-                if outcome == .finished { apply(outcome, to: &r, httpStatus: status) } else { markCancelled(&r) }
+                if outcome == .finished { apply(outcome, to: &r, httpStatus: status); return }
+                // An answer that leaves it open whether the commit was applied (S3's 404 to a resent
+                // completion) keeps `committing`, so a restart reports session-closed.
+                if case .failed(let reason, _) = outcome, reason == Reason.sessionClosed { r.committing = true }
+                markCancelled(&r)
                 return
             }
             let outcome = PartsUpload.afterCommit(&r, status: status, body: body)
