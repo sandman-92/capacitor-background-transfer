@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  pull_request:
   workflow_dispatch:
 
 env:
@@ -32,5 +33,46 @@ jobs:
         run: npm run test:android
       - name: iOS core tests
         run: npm run test:ios
+      # macOS runners have no Docker, so the Swift tests' servers run natively here: MinIO built
+      # from its own repository at a pinned release (it no longer publishes binaries or images, and
+      # Homebrew's formula is deprecated), Azurite from npm at a pinned version, and the harness.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Build MinIO
+        env:
+          MINIO_RELEASE: RELEASE.2025-10-15T17-29-55Z
+        run: |
+          git clone --depth 1 --branch "$MINIO_RELEASE" https://github.com/minio/minio "$RUNNER_TEMP/minio-src"
+          (cd "$RUNNER_TEMP/minio-src" && go build -o "$RUNNER_TEMP/minio" .)
+      - name: Start MinIO, Azurite and the harness
+        run: |
+          mkdir -p "$RUNNER_TEMP/minio-data" "$RUNNER_TEMP/azurite"
+          MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin nohup "$RUNNER_TEMP/minio" server "$RUNNER_TEMP/minio-data" --address 127.0.0.1:9000 > "$RUNNER_TEMP/minio.log" 2>&1 &
+          nohup npx --yes azurite@3.37.0 azurite-blob --blobHost 127.0.0.1 --blobPort 10000 --location "$RUNNER_TEMP/azurite" --skipApiVersionCheck --loose > "$RUNNER_TEMP/azurite.log" 2>&1 &
+          S3_UPSTREAM=http://127.0.0.1:9000 AZURE_UPSTREAM=http://127.0.0.1:10000 nohup node test-servers/harness.mjs > "$RUNNER_TEMP/harness.log" 2>&1 &
+          for i in $(seq 1 60); do curl -fs http://localhost:8790/health && break; sleep 2; done
+          curl -fs http://localhost:8790/health
+      - name: iOS core tests against the servers
+        env:
+          BT_HARNESS: http://localhost:8790
+        run: npm run test:ios
       - name: iOS build
         run: npm run verify:ios
+
+  servers-jvm:
+    name: Android tests against MinIO and Azurite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: ${{ env.JAVA_VERSION }}
+      - run: npm ci
+      - name: JUnit against MinIO and Azurite (compose; stops them afterwards)
+        run: npm run test:servers

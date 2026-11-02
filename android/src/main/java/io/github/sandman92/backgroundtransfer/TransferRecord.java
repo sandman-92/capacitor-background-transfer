@@ -1,7 +1,12 @@
 package io.github.sandman92.backgroundtransfer;
 
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -36,6 +41,18 @@ public final class TransferRecord {
     /** Runs in a row that ended without moving a byte; caps the job's retries. */
     public int idleRuns;
     public Map<String, String> headers = new LinkedHashMap<>();
+    /** {@code s3-multipart}: the presigned part URLs, part 1 first. */
+    public List<String> partUrls = new ArrayList<>();
+    /** {@code s3-multipart}: bytes per part, or 0 for the default. */
+    public long partSize;
+    /** {@code s3-multipart}: the presigned ListParts URL, or null. */
+    public String listPartsUrl;
+    /** {@code azure-blocks}: bytes per block, or 0 for the default. */
+    public long blockSize;
+    /** Parts or blocks the server holds, by number: the S3 {@code ETag} or the Azure block id. */
+    public Map<Integer, String> parts = new TreeMap<>();
+    /** The commit (S3 completion, Azure block list) has been sent: a lost answer isn't taken as success. */
+    public boolean committing;
     public String channelId;
     public String channelName;
     public String title;
@@ -81,6 +98,16 @@ public final class TransferRecord {
             putOpt(o, "channelName", channelName);
             putOpt(o, "title", title);
             putOpt(o, "text", text);
+            if (!partUrls.isEmpty()) o.put("partUrls", new JSONArray(partUrls));
+            if (partSize > 0) o.put("partSize", partSize);
+            putOpt(o, "listPartsUrl", listPartsUrl);
+            if (blockSize > 0) o.put("blockSize", blockSize);
+            if (!parts.isEmpty()) {
+                JSONObject p = new JSONObject();
+                for (Map.Entry<Integer, String> e : parts.entrySet()) p.put(String.valueOf(e.getKey()), e.getValue());
+                o.put("parts", p);
+            }
+            if (committing) o.put("committing", true);
         }
         return o;
     }
@@ -117,6 +144,20 @@ public final class TransferRecord {
         r.channelName = o.has("channelName") ? o.getString("channelName") : null;
         r.title = o.has("title") ? o.getString("title") : null;
         r.text = o.has("text") ? o.getString("text") : null;
+        JSONArray urls = o.optJSONArray("partUrls");
+        if (urls != null) for (int i = 0; i < urls.length(); i++) r.partUrls.add(urls.getString(i));
+        r.partSize = o.optLong("partSize", 0);
+        r.listPartsUrl = o.has("listPartsUrl") ? o.getString("listPartsUrl") : null;
+        r.blockSize = o.optLong("blockSize", 0);
+        JSONObject p = o.optJSONObject("parts");
+        if (p != null) {
+            Iterator<String> numbers = p.keys();
+            while (numbers.hasNext()) {
+                String n = numbers.next();
+                r.parts.put(Integer.parseInt(n), p.getString(n));
+            }
+        }
+        r.committing = o.optBoolean("committing", false);
         return r;
     }
 }

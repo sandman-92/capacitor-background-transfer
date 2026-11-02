@@ -29,6 +29,26 @@ public struct TransferRecord: Codable, Equatable {
     /// Upload: the HTTP status of a refusal still being checked against the session. Kept so a
     /// launch that finds no answer yet checks again instead of guessing.
     public var refusedStatus: Int?
+    /// `s3-multipart`: the presigned part URLs, part 1 first.
+    public var partUrls: [String]?
+    /// `s3-multipart`: bytes per part; nil for the default.
+    public var partSize: Int64?
+    /// `s3-multipart`: the presigned ListParts URL.
+    public var listPartsUrl: String?
+    /// `azure-blocks`: bytes per block; nil for the default.
+    public var blockSize: Int64?
+    /// Upload in parts: the parts or blocks the server holds, by number ("1", "2", …): the S3 `ETag`
+    /// or the Azure block id.
+    public var parts: [String: String]?
+    /// Upload in parts: the commit (S3 completion, Azure block list) has been handed over. A lost
+    /// answer isn't taken as success.
+    public var committing: Bool?
+    /// Upload in parts: 0 while the commit's task runs (its body file is `remainderPath`).
+    public var currentPart: Int?
+    /// Upload in parts (iOS): the tasks carrying parts or blocks, by task identifier, each with its
+    /// part number and the temporary copy it sends. One while the app is on screen; every remaining
+    /// part once the app has left it.
+    public var partTasks: [String: PartTask]?
 
     public init(id: String, direction: Direction, url: String, path: String) {
         self.id = id
@@ -56,6 +76,17 @@ public struct TransferRecord: Codable, Equatable {
         if let message = message { o["message"] = message }
         if let httpStatus = httpStatus { o["httpStatus"] = httpStatus }
         return o
+    }
+}
+
+/// A background task carrying one part or block, and the temporary copy of its range.
+public struct PartTask: Codable, Equatable {
+    public var part: Int
+    public var copy: String
+
+    public init(part: Int, copy: String) {
+        self.part = part
+        self.copy = copy
     }
 }
 

@@ -7,4 +7,7 @@ public interface Progress {
 
     /** Checked between chunks and reads: non-null stops the transfer with that reason. */
     String stopReason();
+
+    /** Saves the record now: an adapter has changed what it resumes from (a part sent, the commit sent). */
+    default void saveState() {}
 }
