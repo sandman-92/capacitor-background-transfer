@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: 20
+  JAVA_VERSION: 21
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: ${{ env.JAVA_VERSION }}
+      - run: npm ci
+      - name: Lint
+        run: npm run eslint && npm run prettier -- --check
+      - name: Typecheck, Vitest and build
+        run: npm run typecheck && npm test && npm run build
+      - name: Android unit tests
+        run: npm run test:android
+      - name: iOS core tests
+        run: npm run test:ios
+      - name: iOS build
+        run: npm run verify:ios
