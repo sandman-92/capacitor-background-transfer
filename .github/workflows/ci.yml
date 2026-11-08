@@ -4,7 +4,12 @@ on:
   push:
     branches:
       - main
+  pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   NODE_VERSION: 20
@@ -13,6 +18,9 @@ env:
 jobs:
   verify:
     name: Verify
+    # Pull requests are only verified when Dependabot opens them, so they can
+    # merge themselves; everything else is verified on the push to main.
+    if: github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -34,3 +42,24 @@ jobs:
         run: npm run test:ios
       - name: iOS build
         run: npm run verify:ios
+
+  dependabot-merge:
+    name: Merge Dependabot update
+    needs: verify
+    # Patch and minor updates merge once Verify passes. Major updates stay open
+    # for review, as do pull requests someone else has pushed to.
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge "$PR_URL" --merge
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
