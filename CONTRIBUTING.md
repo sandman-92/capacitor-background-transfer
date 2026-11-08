@@ -103,5 +103,37 @@ npx cap run android   # or: npx cap run ios
 
 ## Releasing
 
-Releases are tagged `vX.Y.Z` on `main` with a matching `CHANGELOG.md` entry, then published with
-`npm publish`.
+A GitHub release publishes the package to npm (`.github/workflows/release.yml`). Nothing is
+published by a merge to `main`.
+
+1. On a branch, set the version in `package.json` (and `package-lock.json`: `npm version X.Y.Z
+   --no-git-tag-version` does both) and date the version's entry in `CHANGELOG.md` (`## X.Y.Z
+   (YYYY-MM-DD)`, not `(unreleased)`). Merge it.
+2. On GitHub, draft a release from `main` with a new tag `vX.Y.Z` and the changelog entry as its
+   notes. Tick **pre-release** for a version to try first: it is published under npm's `next`
+   dist-tag, so `npm install capacitor-background-transfer@next` gets it and plain installs don't.
+   Untick it later, or publish the next version as a full release, for `latest`.
+3. Publishing the release runs the workflow: it checks that the tag names the version in
+   `package.json`, that `CHANGELOG.md` has a dated entry for it and that the tagged commit is on
+   `main`; runs the lint, TypeScript, JUnit and XCTest suites and the iOS build (the server tests
+   ran on the merge to `main`); shows what the tarball holds (`npm pack --dry-run`, the `files`
+   list in `package.json`); and runs `npm publish --provenance --access public`, so the npm page
+   links the release back to this repository and the workflow run.
+
+### One-time npm setup
+
+The workflow signs in to npm one of two ways:
+
+- **Trusted publishing (no secret).** On npmjs.com, under the package's settings, add a trusted
+  publisher: GitHub Actions, repository `sandman-92/capacitor-background-transfer`, workflow
+  `release.yml`, no environment. The workflow's `id-token: write` permission lets npm verify the
+  run, and no token is stored anywhere. npm only offers this for a package that already exists,
+  so the first release can't use it.
+- **A token (`NPM_TOKEN`).** For the first release (or if the trusted publisher is ever removed):
+  on npmjs.com create a granular access token with read and write access to this package (or to
+  new packages, the first time) and 2FA bypass for automation, and store it as the repository
+  secret `NPM_TOKEN`. The workflow writes it to `.npmrc` for the publish only. Once the trusted
+  publisher is set up, delete the secret: with no `NPM_TOKEN` the workflow uses trusted
+  publishing.
+
+Provenance needs a public repository, which this is.
