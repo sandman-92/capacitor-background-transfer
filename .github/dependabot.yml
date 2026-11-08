@@ -1,0 +1,23 @@
+# Keeps the actions the workflows use current. They are pinned to commit SHAs (with the version in
+# a comment), so nothing moves unless one of these pull requests is merged. Patch and minor bumps
+# come together in one weekly pull request, which CI merges once it passes; each major bump comes
+# on its own and waits for review. npm dependencies get security updates only (repository
+# settings), not version updates. A new release waits a week before it's offered, so a hijacked
+# release is likelier to be caught and pulled first.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/release-checks
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
