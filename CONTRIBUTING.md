@@ -27,6 +27,31 @@ A change to an upload protocol should also pass the end-to-end runs on an emulat
 `npm run fmt` fixes formatting. The API section of `README.md` is generated from
 `src/definitions.ts` by `npm run build`; edit the comments there, not the README.
 
+### The workflows
+
+A change under `.github/` should also pass the checks CI's **Workflow checks** job runs on every
+push and pull request: [zizmor](https://docs.zizmor.sh) (security) and
+[actionlint](https://github.com/rhysd/actionlint) (correctness). The job fails on any high or
+medium zizmor finding and on any actionlint error. Locally, with zizmor 1.31.1 and actionlint
+1.7.12 (the versions CI pins):
+
+```bash
+zizmor --offline --min-severity medium .   # the workflows, .github/actions/ and dependabot.yml
+actionlint
+```
+
+A finding accepted on purpose gets an inline `# zizmor: ignore[<audit>]` on the line zizmor
+points at, with the reason beside it.
+
+Every `uses:` names an action by its full commit SHA, with the version in a comment
+(`actions/checkout@<sha> # v4.4.0`), so a moved tag can't change what runs. Dependabot keeps them
+current (`.github/dependabot.yml`): once a week, patch and minor bumps come together in one pull
+request, which CI merges itself once Verify and the server tests pass; each major bump comes on
+its own and waits for review. CI only merges a pull request Dependabot opened from a branch in
+this repository whose every commit Dependabot authored and GitHub signed, so one somebody else
+has pushed to stays open. The publish path restores no caches: caching is off explicitly on every
+setup action in `release.yml` and `.github/actions/release-checks`.
+
 ## The tests
 
 ```bash
@@ -120,9 +145,22 @@ published by a merge to `main`.
 3. Publishing the release runs the workflow: it checks that the tag names the version in
    `package.json`, that `CHANGELOG.md` has a dated entry for it and that the tagged commit is on
    `main`; runs the lint, TypeScript, JUnit and XCTest suites and the iOS build (the server tests
-   ran on the merge to `main`); shows what the tarball holds (`npm pack --dry-run`, the `files`
-   list in `package.json`); and runs `npm publish --provenance --access public`, so the npm page
-   links the release back to this repository and the workflow run.
+   ran on the merge to `main`); installs a pinned npm 11; shows what the tarball holds
+   (`npm pack --dry-run`, the `files` list in `package.json`); and runs
+   `npm publish --provenance --access public`, so the npm page links the release back to this
+   repository and the workflow run. The checks live in `.github/actions/release-checks`, which
+   the dry run below shares.
+
+### A dry run
+
+To try the release workflow without releasing, start it by hand: Actions → **Release** → Run
+workflow, from `main` (or `gh workflow run release.yml --ref main`). Its **Dry run** job runs the
+same checks as a release, less the tag ones (it checks the version's dated changelog entry but no
+tag, and not that the commit is on `main`), and ends in `npm publish --dry-run`. If the version
+in `package.json` is already on npm, as it is between releases, that run's copy is renamed to a
+throwaway `X.Y.Z-dryrun.<run id>` first, because npm refuses even a dry run over a published
+version. It can't publish or move a dist-tag: it has no `id-token` permission and no `NPM_TOKEN`,
+and the publish and promote jobs run only for a GitHub release.
 
 ### One-time npm setup
 
@@ -130,8 +168,8 @@ The workflow signs in to npm one of two ways:
 
 - **Trusted publishing (no secret).** On npmjs.com, under the package's settings, add a trusted
   publisher: GitHub Actions, repository `sandman-92/capacitor-background-transfer`, workflow
-  `release.yml`, no environment. The workflow's `id-token: write` permission lets npm verify the
-  run, and no token is stored anywhere. npm only offers this for a package that already exists,
+  `release.yml`, no environment (so keep the workflow's file name). The publish job's
+  `id-token: write` permission lets npm verify the run, and no token is stored anywhere. npm only offers this for a package that already exists,
   so the first release can't use it.
 - **A token (`NPM_TOKEN`).** For the first release (or if the trusted publisher is ever removed):
   on npmjs.com create a granular access token with read and write access to this package (or to
