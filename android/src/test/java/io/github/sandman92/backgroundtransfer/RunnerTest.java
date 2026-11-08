@@ -304,6 +304,28 @@ public class RunnerTest {
     }
 
     @Test
+    public void aStoppedTransferKeepsNoHeaders() throws Exception {
+        TransferRecord a = download("a", server.url("/object"));
+        a.headers.put("Authorization", "Bearer t");
+        Runner.enqueue(store, a);
+        assertEquals("kept while queued", "Bearer t", store.get(TransferRecord.DOWNLOAD, "a").headers.get("Authorization"));
+        Runner.cancel(store, TransferRecord.DOWNLOAD, "a");
+        TransferRecord r = store.get(TransferRecord.DOWNLOAD, "a");
+        assertEquals(TransferRecord.CANCELLED, r.state);
+        assertTrue("gone once cancelled", r.headers.isEmpty());
+        TransferRecord b = download("b", server.url("/object"));
+        b.headers.put("Authorization", "Bearer t");
+        Runner.enqueue(store, b);
+        Runner.begin(TransferRecord.DOWNLOAD);
+        assertEquals(Runner.Outcome.DONE, Runner.drain(store, TransferRecord.DOWNLOAD, new Host(true)));
+        TransferRecord done = store.get(TransferRecord.DOWNLOAD, "b");
+        assertEquals(TransferRecord.FINISHED, done.state);
+        assertTrue("gone once finished", done.headers.isEmpty());
+        String onDisk = new String(Files.readAllBytes(new File(tmp.getRoot(), "store/transfers.json").toPath()), "UTF-8");
+        assertFalse("and not on the disk either", onDisk.contains("Bearer t"));
+    }
+
+    @Test
     public void theStoreSurvivesAReload() {
         TransferRecord a = download("a", server.url("/object"));
         a.headers.put("X-A", "1");

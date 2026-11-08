@@ -54,8 +54,17 @@ describe('checkTransferOptions', () => {
     [{ ...ok, headers: ['a'] }, 'headers must be an object of strings'],
     [{ ...ok, headers: { 'X-N': 5 } }, 'header X-N must be a string'],
     [{ ...ok, headers: { 'X-Bad': 'a\r\nInjected: 1' } }, 'header X-Bad must be one line'],
+    [{ ...ok, headers: { 'X-Bad': 'a\u0000b' } }, 'header X-Bad must be one line'],
+    [{ ...ok, headers: { 'X-Bad\r': 'v' } }, 'header X-Bad\r must be one line'],
+    [{ ...ok, headers: { '': 'v' } }, 'header  must be one line'],
   ])('refuses %j', (options, message) => {
     expect(() => checkTransferOptions(options as never)).toThrow(message);
+  });
+
+  it('accepts non-ASCII text in a header value', () => {
+    expect(checkTransferOptions({ ...ok, headers: { 'X-Goog-Meta-Name': 'héllo wörld' } }).headers).toEqual({
+      'X-Goog-Meta-Name': 'héllo wörld',
+    });
   });
 
   it('refuses missing options', () => {

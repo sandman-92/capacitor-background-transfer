@@ -94,6 +94,22 @@ public class BackgroundTransferPlugin extends Plugin implements Runner.Events {
             call.reject("id, url and an absolute path are required");
             return;
         }
+        // The wrapper's checks, repeated here: a script can call the plugin without it.
+        String refusedUrl = TransferPaths.checkUrl(url);
+        if (refusedUrl != null) {
+            call.reject(refusedUrl);
+            return;
+        }
+        String refusedPath = TransferPaths.confine(
+            path,
+            allowedRoots(),
+            Scheduler.storeDir(getContext()),
+            TransferRecord.DOWNLOAD.equals(direction)
+        );
+        if (refusedPath != null) {
+            call.reject(refusedPath);
+            return;
+        }
         TransferRecord r = new TransferRecord();
         r.id = id;
         r.direction = direction;
@@ -120,6 +136,11 @@ public class BackgroundTransferPlugin extends Plugin implements Runner.Events {
                 String value = headers.getString(name);
                 if (value != null) r.headers.put(name, value);
             }
+            String refusedHeader = TransferPaths.checkHeaders(r.headers);
+            if (refusedHeader != null) {
+                call.reject(refusedHeader);
+                return;
+            }
         }
         JSObject n = call.getObject("notification");
         if (n != null) {
@@ -139,6 +160,26 @@ public class BackgroundTransferPlugin extends Plugin implements Runner.Events {
                 call.reject("could not start the " + direction + ": " + e.getMessage(), e);
             }
         });
+    }
+
+    /**
+     * Where a transfer's file may be: the app's own directories (internal and external files and
+     * cache, and the no-backup files), plus any absolute paths the app lists under
+     * {@code allowedRoots} in the plugin's configuration (never from JavaScript).
+     */
+    private List<File> allowedRoots() {
+        android.content.Context context = getContext().getApplicationContext();
+        List<File> roots = new ArrayList<>();
+        roots.add(context.getFilesDir());
+        roots.add(context.getNoBackupFilesDir());
+        roots.add(context.getCacheDir());
+        File[] external = context.getExternalFilesDirs(null);
+        if (external != null) roots.addAll(java.util.Arrays.asList(external));
+        File[] externalCache = context.getExternalCacheDirs();
+        if (externalCache != null) roots.addAll(java.util.Arrays.asList(externalCache));
+        String[] configured = getConfig().getArray("allowedRoots");
+        if (configured != null) for (String p : configured) if (p != null && p.startsWith("/")) roots.add(new File(p));
+        return roots;
     }
 
     /**

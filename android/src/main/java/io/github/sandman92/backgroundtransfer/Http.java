@@ -79,6 +79,7 @@ final class Http {
         try {
             c = (HttpURLConnection) new URL(url).openConnection();
             c.setRequestMethod(method);
+            c.setInstanceFollowRedirects(false);
             c.setUseCaches(false);
             c.setConnectTimeout(30_000);
             c.setReadTimeout(120_000);
@@ -209,6 +210,23 @@ final class Http {
             }
             return new String(b.toByteArray(), StandardCharsets.UTF_8);
         }
+    }
+
+    /**
+     * Whether {@code next} has the same origin as {@code from}: scheme, host and port. A redirect
+     * elsewhere isn't followed, so the caller's headers only ever reach the host it named.
+     */
+    static boolean sameOrigin(URL from, URL next) {
+        if (!from.getProtocol().equalsIgnoreCase(next.getProtocol())) return false;
+        if (from.getHost() == null || !from.getHost().equalsIgnoreCase(next.getHost())) return false;
+        int a = from.getPort() == -1 ? from.getDefaultPort() : from.getPort();
+        int b = next.getPort() == -1 ? next.getDefaultPort() : next.getPort();
+        return a == b;
+    }
+
+    /** Whether {@code status} is a redirect with a {@code Location} to follow. */
+    static boolean isRedirect(int status) {
+        return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
     }
 
     /** {@code url} with {@code extra} added to its query. */

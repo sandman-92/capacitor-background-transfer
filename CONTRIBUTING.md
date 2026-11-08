@@ -56,7 +56,9 @@ pinned, and their ports published on `127.0.0.1` only.
 start without them. It reruns the JUnit suite even when Gradle holds results from a run without
 the servers, and says how many of `ServersTest`'s cases ran. In CI the JUnit suite runs against
 the compose servers on Linux; the Swift suite runs on macOS, which has no Docker, against the
-same MinIO release built from its repository, Azurite 3.37.0 from npm and the harness.
+same MinIO release built from its repository, Azurite 3.37.0 from npm and the harness. CI also
+scans every push and pull request for committed secrets (gitleaks, configured in
+`.gitleaks.toml`, which allowlists the test servers' published development credentials).
 
 ```bash
 npm run servers:up      # start them (docker compose up --wait)

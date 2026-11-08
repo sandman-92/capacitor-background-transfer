@@ -191,6 +191,19 @@ public class UploaderTest {
         void run() throws Exception;
     }
 
+    @Test
+    public void aRedirectIsNotFollowed() throws Exception {
+        File f = Bytes.write(tmp.getRoot(), "v.mp4", Bytes.pattern(CHUNK));
+        server.failStatus = 307;
+        server.failCount.set(1);
+        TransferException e = expect(TransferException.Reason.SESSION_REFUSED, () ->
+            uploader().run(server.url("/upload"), f, Collections.singletonMap("Authorization", "Bearer t"), new Bytes.Recorder())
+        );
+        assertEquals(307, e.httpStatus);
+        assertTrue(e.getMessage(), e.getMessage().contains("redirect"));
+        assertEquals("one request, nothing after the redirect", 1, server.log.size());
+    }
+
     static TransferException expect(String reason, Call call) {
         try {
             call.run();

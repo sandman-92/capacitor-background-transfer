@@ -50,7 +50,22 @@ final class Scheduler {
     }
 
     static TransferStore store(Context context) {
-        return TransferStore.in(new File(context.getApplicationContext().getFilesDir(), "background-transfer"));
+        return TransferStore.in(storeDir(context));
+    }
+
+    /**
+     * The plugin's own directory: under the no-backup files, so the records (with their headers and
+     * tokens) are never in Auto Backup. A store an earlier version kept under {@code filesDir} is
+     * moved here the first time, so transfers in flight across the upgrade are kept.
+     */
+    static File storeDir(Context context) {
+        Context app = context.getApplicationContext();
+        File dir = new File(app.getNoBackupFilesDir(), "background-transfer");
+        File old = new File(app.getFilesDir(), "background-transfer");
+        if (!dir.exists() && old.isDirectory() && !old.renameTo(dir)) {
+            android.util.Log.w("BackgroundTransfer", "could not move the transfer store out of the backed-up files");
+        }
+        return dir;
     }
 
     static int jobIdFor(String direction) {

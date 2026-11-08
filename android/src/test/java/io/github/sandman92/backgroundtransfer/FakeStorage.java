@@ -35,6 +35,10 @@ final class FakeStorage implements AutoCloseable {
     volatile boolean ignoreRange;
     /** Accept only this many bytes of each non-final upload chunk (as a server that kept part of it). */
     volatile int keepPerChunk = Integer.MAX_VALUE;
+    /** Where {@code /redirect} sends the client: a path here, or a full URL elsewhere. */
+    volatile String redirectTo = "/object";
+    /** The status {@code /redirect} answers with. */
+    volatile int redirectStatus = 302;
 
     static {
         // The JVM's HttpURLConnection resends a POST once when the connection drops; Android's doesn't. Match Android.
@@ -49,6 +53,10 @@ final class FakeStorage implements AutoCloseable {
                     String path = String.valueOf(r.getPath());
                     if (path.startsWith("/upload")) return upload(r);
                     if (path.startsWith("/object")) return download(r);
+                    if (path.startsWith("/redirect")) {
+                        log.add(r.getMethod() + " redirect auth=" + (r.getHeader("Authorization") != null));
+                        return new MockResponse().setResponseCode(redirectStatus).addHeader("Location", redirectTo);
+                    }
                     return new MockResponse().setResponseCode(404);
                 }
             }

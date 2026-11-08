@@ -20,6 +20,19 @@ DerivedData/
 # macOS files
 .DS_Store
 
+# Secrets and signing material: never committed, whatever the example app is pointed at
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.p8
+*.pem
+google-services.json
+GoogleService-Info.plist
+serviceAccountKey*.json
+
 
 
 # Based on Android gitignore template: https://github.com/github/gitignore/blob/HEAD/Android.gitignore

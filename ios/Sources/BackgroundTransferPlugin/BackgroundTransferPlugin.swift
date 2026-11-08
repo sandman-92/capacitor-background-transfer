@@ -64,6 +64,16 @@ public class BackgroundTransferPlugin: CAPPlugin, CAPBridgedPlugin, TransferList
             call.reject("id, url and an absolute path are required")
             return
         }
+        // The wrapper's checks, repeated here: a script can call the plugin without it.
+        if let refused = TransferPaths.checkUrl(url) {
+            call.reject(refused)
+            return
+        }
+        if let refused = TransferPaths.confine(path, roots: allowedRoots(), refused: TransferManager.shared.directory,
+                                               download: direction == .download) {
+            call.reject(refused)
+            return
+        }
         var record = TransferRecord(id: id, direction: direction, url: url, path: path)
         if direction == .upload {
             guard let chosen = UploadProtocol.resolve(call.getString("protocol")) else {
@@ -80,10 +90,27 @@ public class BackgroundTransferPlugin: CAPPlugin, CAPBridgedPlugin, TransferList
             for (name, value) in headers {
                 if let value = value as? String { record.headers[name] = value }
             }
+            if let refused = TransferPaths.checkHeaders(record.headers) {
+                call.reject(refused)
+                return
+            }
         }
         TransferManager.shared.enqueue(record) { stored in
             call.resolve(["transfer": stored.js])
         }
+    }
+
+    /// Where a transfer's file may be: the app's own Documents, Library (Application Support and
+    /// Caches included) and tmp, plus any absolute paths the app lists under `allowedRoots` in the
+    /// plugin's configuration (never from JavaScript).
+    private func allowedRoots() -> [URL] {
+        let fm = FileManager.default
+        var roots = fm.urls(for: .documentDirectory, in: .userDomainMask) + fm.urls(for: .libraryDirectory, in: .userDomainMask)
+        roots.append(fm.temporaryDirectory)
+        if let configured = getConfig().getArray("allowedRoots") {
+            roots += configured.compactMap { $0 as? String }.filter { $0.hasPrefix("/") }.map { URL(fileURLWithPath: $0) }
+        }
+        return roots
     }
 
     /// Reads `partUrls`, `partSize`, `listPartsUrl` and `blockSize` into `record`, and returns what is

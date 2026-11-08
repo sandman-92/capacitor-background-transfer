@@ -19,7 +19,9 @@ final class TransferManager: NSObject {
     let queue = DispatchQueue(label: "io.github.sandman92.backgroundtransfer")
     private let delegateQueue = OperationQueue()
     private let store: TransferStore
-    private let directory: URL
+    /// The plugin's own storage: the records, remainder copies and resume data. No transfer may
+    /// read or write here.
+    let directory: URL
     private var completionHandlers: [String: () -> Void] = [:]
     /// Keys of transfers the app asked to cancel, so the task's cancellation reads as theirs.
     private var cancelling = Set<String>()
@@ -55,6 +57,8 @@ final class TransferManager: NSObject {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         directory = support.appendingPathComponent("BackgroundTransfer", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Headers, tokens and resume data: never in a backup, never restored onto another device.
+        try? Files.excludeFromBackup(directory)
         store = TransferStore(file: directory.appendingPathComponent("transfers.json"))
         // Made on the main thread (the plugin's load, or the system's background session events).
         onScreen = Thread.isMainThread ? UIApplication.shared.applicationState != .background : false
@@ -293,7 +297,7 @@ final class TransferManager: NSObject {
         query.httpBody = Data()
         // Inside the ~30 s a relaunched app gets: the completion handler waits for this answer.
         query.timeoutInterval = UploadOutcome.checkTimeout
-        let probe = URLSession(configuration: .ephemeral)
+        let probe = URLSession(configuration: .ephemeral, delegate: SameOriginRedirects(), delegateQueue: nil)
         probe.dataTask(with: query) { _, response, error in
             probe.finishTasksAndInvalidate()
             self.queue.async { done(response, error) }
@@ -411,7 +415,7 @@ final class TransferManager: NSObject {
             return
         }
         probe.timeoutInterval = UploadOutcome.checkTimeout
-        let session = URLSession(configuration: .ephemeral)
+        let session = URLSession(configuration: .ephemeral, delegate: SameOriginRedirects(), delegateQueue: nil)
         session.dataTask(with: probe) { body, response, error in
             session.finishTasksAndInvalidate()
             self.queue.async {
@@ -658,6 +662,10 @@ final class TransferManager: NSObject {
         let dest = URL(fileURLWithPath: r.path)
         try? FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
         let part = Files.partURL(for: dest)
+        if TransferPaths.isSymbolicLink(dest) || TransferPaths.isSymbolicLink(part) {
+            fail(&r, Reason.unknown, "refusing to write through a symbolic link at \(r.path)")
+            return
+        }
         let have = (try? Files.fileSize(part)) ?? 0
         let task: URLSessionDownloadTask
         if let data = try? Data(contentsOf: resumeDataURL(r.key)) {
@@ -692,6 +700,14 @@ final class TransferManager: NSObject {
         let part = Files.partURL(for: dest)
         let http = task.response as? HTTPURLResponse
         let status = http?.statusCode ?? 0
+        if let crossed = redirectedElsewhere(task) {
+            downloadOutcome[key] = (.failed, Reason.sessionRefused, crossed, status)
+            return
+        }
+        if TransferPaths.isSymbolicLink(dest) || TransferPaths.isSymbolicLink(part) {
+            downloadOutcome[key] = (.failed, Reason.unknown, "refusing to write through a symbolic link at \(r.path)", status)
+            return
+        }
         do {
             // What the delivered file holds: from the start this task asked for (its Range, or 0) to the
             // end. The system may resume a dropped download by itself and answer 206 to a request that
@@ -796,6 +812,10 @@ final class TransferManager: NSObject {
             }
             let http = task.response as? HTTPURLResponse
             let status = http?.statusCode ?? 0
+            if let crossed = redirectedElsewhere(task) {
+                fail(&r, Reason.sessionRefused, crossed)
+                return
+            }
             if UploadProtocol.resolve(r.protocol) != .firebaseResumable {
                 answered(r, part: part, status: status, etag: http?.value(forHTTPHeaderField: "ETag"), body: body)
                 return
@@ -836,6 +856,16 @@ final class TransferManager: NSObject {
             try? data.write(to: resumeDataURL(key))
         }
         if resumable { interrupt(&r, reason, ns.localizedDescription) } else { fail(&r, reason, ns.localizedDescription) }
+    }
+
+    /// A background session follows redirects by itself and tells nobody, so a task whose answer
+    /// came from another origin than the URL the app named is refused once it ends: the message, or
+    /// nil when it stayed where it was sent.
+    private func redirectedElsewhere(_ task: URLSessionTask) -> String? {
+        let original = task.originalRequest?.url
+        let final = task.response?.url ?? task.currentRequest?.url
+        guard Redirects.crossedOrigin(original: original, final: final) else { return nil }
+        return "redirected to \(final?.host ?? "another host"): the request left the host the URL named, so its answer isn't accepted"
     }
 
     /// The answer wasn't a clean finalize: the system may have resent the request by itself, with the
@@ -1004,6 +1034,20 @@ extension TransferManager: URLSessionDataDelegate, URLSessionDownloadDelegate {
         guard let id = session.configuration.identifier, let handler = completionHandlers.removeValue(forKey: id) else { return }
         // Not while a session check is out: the app would be suspended before its answer.
         if checks > 0 { heldHandlers.append(handler) } else { DispatchQueue.main.async(execute: handler) }
+    }
+}
+
+/// The plain sessions' redirect policy: followed on the same origin only, so the app's headers
+/// never reach a host it didn't name. (Background sessions take no such delegate; their tasks are
+/// checked when they end.)
+final class SameOriginRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let from = task.originalRequest?.url, let to = request.url, Redirects.sameOrigin(from, to) else {
+            completionHandler(nil) // The 3xx answer stands, and reads as a refusal.
+            return
+        }
+        completionHandler(request)
     }
 }
 

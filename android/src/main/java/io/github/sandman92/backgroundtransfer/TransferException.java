@@ -49,7 +49,9 @@ public class TransferException extends Exception {
         if (status == 404 || status == 410) reason = Reason.SESSION_EXPIRED;
         else if (status == 408 || status == 429 || status >= 500) reason = Reason.SERVER_ERROR;
         else reason = Reason.SESSION_REFUSED;
-        return new TransferException(reason, what + " HTTP " + status, status, null);
+        String message = what + " HTTP " + status;
+        if (status >= 300 && status < 400) message += " (a redirect, which an upload never follows)";
+        return new TransferException(reason, message, status, null);
     }
 
     /** An I/O error while writing to local disk: full, or something else. */

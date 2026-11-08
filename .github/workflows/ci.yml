@@ -16,6 +16,22 @@ env:
   JAVA_VERSION: 21
 
 jobs:
+  secrets:
+    name: Secret scan
+    # Every push and pull request, whoever opened it: a key or credentials file that slipped into
+    # a commit would otherwise be published with the repository.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # the action lists a pull request's commits to scan them
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   verify:
     name: Verify
     # Pull requests are only verified when Dependabot opens them, so they can

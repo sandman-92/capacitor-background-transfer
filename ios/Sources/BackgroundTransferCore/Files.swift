@@ -115,6 +115,21 @@ public enum Files {
     public static func partURL(for destination: URL) -> URL {
         URL(fileURLWithPath: destination.path + ".part")
     }
+
+    /// Keeps `directory` and everything under it out of iCloud and Finder backups: the plugin's
+    /// records hold the headers and URLs (with their tokens) of every transfer, its resume data the
+    /// original requests, and none of that belongs on another device.
+    public static func excludeFromBackup(_ directory: URL) throws {
+        var url = directory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try url.setResourceValues(values)
+    }
+
+    /// Whether `url` is excluded from backups (for the tests).
+    public static func isExcludedFromBackup(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup) ?? false
+    }
 }
 
 /// A parsed `Content-Range` header.

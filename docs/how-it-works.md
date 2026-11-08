@@ -34,10 +34,31 @@ Some details:
   The answer is recorded first, and the system's completion handler is held until it is in
   (the check gives up after 20 seconds, inside the roughly 30 seconds a relaunched app gets); if
   the app still ends first, the next launch checks again.
-- **Stored on the device.** Each transfer's record, including any `headers` you pass, is kept in
-  the app's sandbox until `forget()` removes it (`files/background-transfer/transfers.json` on
-  Android, `Library/Application Support/BackgroundTransfer/transfers.json` on iOS). Pass
-  credentials there only if you must, and forget the transfer once it ends.
+- **Stored on the device.** Each transfer's record is kept in the app's sandbox until `forget()`
+  removes it: `no_backup/background-transfer/transfers.json` on Android (a store an earlier
+  version kept under `files/` is moved there on the first launch) and
+  `Library/Application Support/BackgroundTransfer/transfers.json` on iOS, a directory marked
+  excluded from backups, which also covers the remainder copies and a download's resume data. So
+  neither Android Auto Backup nor an iCloud or Finder backup carries the records to another
+  device. The `headers` you pass are in the record only while the transfer is queued or running:
+  they are dropped as soon as it finishes, fails, is cancelled or is interrupted (starting it again
+  supplies them afresh). The URL stays, since the app reads it back from `list()`. On iOS the
+  system's resume data for an interrupted download still embeds the original request, headers
+  included, until the download is started again or cancelled.
+- **Where the headers go.** Only to the host named in the URL. On Android a download follows a
+  redirect on the same scheme, host and port (five hops at most) and refuses one anywhere else
+  (`session-refused`, with the 3xx status); an upload never follows one, since the body would have
+  to go again. On iOS the plain requests (the session query, ListParts, Get Block List) are held to
+  the same rule; the background session follows redirects by itself and can't be stopped, so a task
+  whose answer came from another host is reported `session-refused` when it ends, its file
+  discarded, and the headers have by then reached that host once. Pass headers only with URLs that
+  don't redirect.
+- **Where the files may be.** The native side checks `path` itself, after resolving symbolic
+  links, so a script that calls the plugin without the TypeScript wrapper gets the same refusals:
+  inside the app's own directories (or the `allowedRoots` from the plugin's configuration), never
+  the plugin's own storage, no `..`, and no download onto a symbolic link (checked again when the
+  bytes land). The URL's scheme and the headers (one line each, no control characters) are checked
+  natively too.
 
 ## Starting a transfer again
 
