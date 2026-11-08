@@ -42,3 +42,19 @@ First version.
   - `test-servers/`: MinIO and Azurite in Docker with a harness that presigns URLs and injects
     faults; `npm run test:servers` runs the JVM and Swift tests against them; the example app's
     harness mode and `test-servers/e2e.mjs` run them end to end on an emulator or simulator.
+- Hardening, from the security audit of 2026-11-03 (#7, #8, #9, #10, #11):
+  - `path` is confined natively to the app's own directories (Android: files, no-backup files
+    and cache, internal and external; iOS: Documents, Library and tmp), plus any `allowedRoots`
+    from the plugin's configuration, after symbolic links are resolved; the plugin's own storage,
+    `..` segments and a download onto a symbolic link are refused, and a download never writes
+    through one. The URL's scheme and the headers (one line, no control characters) are checked
+    natively as well as in the wrapper, with the same words.
+  - Headers only reach the host in the URL: Android follows a download's redirect on the same
+    origin only and never an upload's; iOS holds its plain requests to the same rule and reports a
+    background task that was redirected elsewhere `session-refused` when it ends.
+  - The transfer store is out of backups (Android: `getNoBackupFilesDir()`, moved there from
+    `filesDir` on the first launch; iOS: the plugin's directory is excluded from backup, resume
+    data and remainder copies included), and a record drops its headers as soon as the transfer
+    stops.
+  - `.gitignore` covers `.env` files, keystores, certificates and platform credential files, and
+    CI runs a secret scan on every push and pull request.

@@ -212,6 +212,7 @@ public final class Uploader implements UploadAdapter {
     static HttpURLConnection open(String url, Map<String, String> headers) throws IOException {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setRequestMethod("POST");
+        c.setInstanceFollowRedirects(false);
         c.setDoOutput(true);
         c.setUseCaches(false);
         c.setConnectTimeout(30_000);

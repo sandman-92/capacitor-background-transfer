@@ -33,12 +33,15 @@ public final class TransferStore {
         return records.values.sorted { $0.queuedAt < $1.queuedAt }
     }
 
-    /// Stores `r`, stamping `updatedAt`. Returns what was stored.
+    /// Stores `r`, stamping `updatedAt`. Returns what was stored. A record that has stopped
+    /// (finished, interrupted, failed or cancelled) is kept without its headers: a restart brings its
+    /// own, and a token has no business on the disk after the request it was for.
     @discardableResult
     public func put(_ r: TransferRecord, save: Bool = true) -> TransferRecord {
         lock.lock(); defer { lock.unlock() }
         var r = r
         r.updatedAt = (Date().timeIntervalSince1970 * 1000).rounded()
+        if !r.isActive { r.headers = [:] }
         records[r.key] = r
         if save { write() }
         return r

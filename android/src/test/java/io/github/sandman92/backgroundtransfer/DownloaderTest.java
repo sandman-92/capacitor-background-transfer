@@ -10,6 +10,8 @@ import static org.junit.Assert.assertTrue;
 import java.io.File;
 import java.nio.file.Files;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Map;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -132,6 +134,55 @@ public class DownloaderTest {
         server.failCount.set(1);
         expect(TransferException.Reason.SESSION_EXPIRED, () -> downloader().run(server.url("/object"), dest, null, new Bytes.Recorder()));
         assertFalse(dest.exists());
+    }
+
+    @Test
+    public void followsARedirectOnTheSameHostWithTheHeaders() throws Exception {
+        Map<String, String> headers = Collections.singletonMap("Authorization", "Bearer t");
+        downloader().run(server.url("/redirect"), dest, headers, new Bytes.Recorder());
+        assertArrayEquals(server.object, Files.readAllBytes(dest.toPath()));
+        assertEquals("GET redirect auth=true", server.log.get(0));
+        assertEquals("GET range=null auth=true", server.log.get(1));
+    }
+
+    @Test
+    public void aRedirectToAnotherHostIsRefusedBeforeAnyHeaderReachesIt() throws Exception {
+        try (FakeStorage other = new FakeStorage()) {
+            other.object = server.object;
+            server.redirectTo = other.url("/object");
+            Map<String, String> headers = Collections.singletonMap("Authorization", "Bearer t");
+            TransferException e = expect(TransferException.Reason.SESSION_REFUSED, () ->
+                downloader().run(server.url("/redirect"), dest, headers, new Bytes.Recorder())
+            );
+            assertEquals(302, e.httpStatus);
+            assertTrue(e.getMessage(), e.getMessage().contains("redirected to"));
+            assertTrue("the other host saw nothing", other.log.isEmpty());
+            assertFalse(dest.exists());
+            assertFalse(Downloader.partFile(dest).exists());
+        }
+    }
+
+    @Test
+    public void aRedirectLoopGivesUp() {
+        server.redirectTo = "/redirect";
+        TransferException e = expect(TransferException.Reason.SESSION_REFUSED, () ->
+            downloader().run(server.url("/redirect"), dest, null, new Bytes.Recorder())
+        );
+        assertTrue(e.getMessage(), e.getMessage().contains("too many redirects"));
+        assertEquals(TransferPaths.MAX_REDIRECTS + 1, server.log.size());
+    }
+
+    @Test
+    public void neverWritesThroughASymbolicLink() throws Exception {
+        File elsewhere = tmp.newFile("elsewhere.bin");
+        dest.getParentFile().mkdirs();
+        Files.createSymbolicLink(dest.toPath(), elsewhere.toPath());
+        TransferException e = expect(TransferException.Reason.UNKNOWN, () ->
+            downloader().run(server.url("/object"), dest, null, new Bytes.Recorder())
+        );
+        assertTrue(e.getMessage(), e.getMessage().contains("symbolic link"));
+        assertEquals("the link's target is untouched", 0, elsewhere.length());
+        assertTrue("the server was never asked", server.log.isEmpty());
     }
 
     @Test

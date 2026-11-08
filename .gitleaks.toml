@@ -1,0 +1,11 @@
+# The secret scan CI runs (gitleaks) with its default rules, less the published development
+# credentials the local test servers use: they are constants anyone can look up, not secrets.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Azurite's built-in development account key and MinIO's default root credentials"
+regexes = [
+  '''Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==''',
+  '''minioadmin''',
+]

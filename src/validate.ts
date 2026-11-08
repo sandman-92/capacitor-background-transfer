@@ -2,11 +2,16 @@ import type { DownloadOptions, UploadOptions } from './definitions';
 import { UPLOAD_LIMITS, UPLOAD_PROTOCOLS } from './definitions';
 
 const HTTP_URL = /^https?:\/\/[^/]+/i;
+// A line break or any other control character in a header name or value.
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f]/;
 
 /**
  * Checks a transfer's options before they cross to the native side, so both
  * platforms refuse the same mistakes with the same words. Returns the
- * options with `path` as a plain absolute path.
+ * options with `path` as a plain absolute path. The native sides repeat these
+ * checks (a script can call the plugin directly), and also confine `path` to
+ * the app's own directories, which only they know.
  */
 export function checkTransferOptions<T extends UploadOptions | DownloadOptions>(options: T): T {
   if (!options || typeof options !== 'object') throw new Error('options are required');
@@ -20,7 +25,7 @@ export function checkTransferOptions<T extends UploadOptions | DownloadOptions>(
     }
     for (const [name, value] of Object.entries(headers)) {
       if (typeof value !== 'string') throw new Error(`header ${name} must be a string`);
-      if (/[\r\n]/.test(name) || /[\r\n]/.test(value)) throw new Error(`header ${name} must be one line`);
+      if (name === '' || CONTROL.test(name) || CONTROL.test(value)) throw new Error(`header ${name} must be one line`);
     }
   }
   return { ...options, path: plain };

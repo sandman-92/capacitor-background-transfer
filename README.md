@@ -104,6 +104,25 @@ The module is `BackgroundTransferPlugin` with both Swift Package Manager and Coc
 upload must be readable while the phone is locked: the default data protection (until the first
 unlock after a restart) is; complete protection isn't.
 
+### Where files may be
+
+A transfer's `path` must be inside the app's own storage, and the native side checks this after
+resolving symbolic links, whatever called it: on Android the app's files, no-backup files and
+cache directories, internal and external (`Directory.Data`, `Directory.Cache` and
+`Directory.External` of the Filesystem plugin); on iOS Documents, Library and tmp (every
+Filesystem directory). Paths with `..`, paths into the plugin's own storage, and a download onto a
+symbolic link are refused. An app that keeps files elsewhere (an app group container, say) lists
+the extra roots in the plugin's configuration, never from JavaScript:
+
+```ts
+// capacitor.config.ts
+plugins: {
+  BackgroundTransfer: {
+    allowedRoots: ['/private/var/mobile/Containers/Shared/AppGroup/…/Videos'],
+  },
+},
+```
+
 ## Quick start
 
 ```ts
@@ -183,9 +202,13 @@ again with the same `id` carries on from where it stopped.
 hours a day. iOS may defer transfers started while the app is in the background. On iOS, resuming
 an upload part-way needs temporary disk space for a copy of the bytes still to send.
 
-**Where do my headers go?** Each transfer's record, including any `headers` you pass, is kept in
-the app's sandbox until you call `forget()`. Pass credentials in headers only if you must, and
-forget the transfer once it ends. Presigned URLs are the better route.
+**Where do my headers go?** To the host in the URL, and nowhere else: a redirect to another host
+is refused rather than followed (on iOS, where the system follows it by itself, the transfer is
+reported `session-refused` when it ends). While a transfer is queued or running its record,
+`headers` included, is kept in the app's sandbox, in storage that is left out of device backups;
+the headers are dropped the moment it finishes, fails, is cancelled or is interrupted (a restart
+brings its own). The URL stays in the record until you call `forget()`, so presigned URLs with a
+short life are the better route for credentials.
 
 ## Feedback and contributing
 

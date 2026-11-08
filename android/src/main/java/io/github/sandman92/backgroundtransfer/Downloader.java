@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.file.Files;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -88,20 +89,47 @@ public final class Downloader {
             throw new TransferException(TransferException.Reason.UNKNOWN, "can't make " + dir);
         }
         long have = part.isFile() ? part.length() : 0;
+        if (Files.isSymbolicLink(part.toPath()) || Files.isSymbolicLink(dest.toPath())) {
+            throw new TransferException(TransferException.Reason.UNKNOWN, "refusing to write through a symbolic link at " + dest);
+        }
         Pause.check(progress);
         HttpURLConnection c = null;
         try {
-            c = (HttpURLConnection) new URL(url).openConnection();
-            c.setUseCaches(false);
-            c.setConnectTimeout(30_000);
-            c.setReadTimeout(120_000);
-            // The byte count must be the file's, not a compressed stream's.
-            c.setRequestProperty("Accept-Encoding", "identity");
-            if (headers != null) {
-                for (Map.Entry<String, String> h : headers.entrySet()) c.setRequestProperty(h.getKey(), h.getValue());
+            URL target = new URL(url);
+            int code;
+            int hops = 0;
+            while (true) {
+                c = (HttpURLConnection) target.openConnection();
+                c.setInstanceFollowRedirects(false);
+                c.setUseCaches(false);
+                c.setConnectTimeout(30_000);
+                c.setReadTimeout(120_000);
+                // The byte count must be the file's, not a compressed stream's.
+                c.setRequestProperty("Accept-Encoding", "identity");
+                if (headers != null) {
+                    for (Map.Entry<String, String> h : headers.entrySet()) c.setRequestProperty(h.getKey(), h.getValue());
+                }
+                if (have > 0) c.setRequestProperty("Range", "bytes=" + have + "-");
+                code = c.getResponseCode();
+                if (!Http.isRedirect(code)) break;
+                // Followed on the same origin only, so the headers never reach a host the app didn't name.
+                String location = c.getHeaderField("Location");
+                URL next = location == null ? null : new URL(target, location);
+                c.disconnect();
+                c = null;
+                if (next == null || !Http.sameOrigin(target, next)) {
+                    throw new TransferException(
+                        TransferException.Reason.SESSION_REFUSED,
+                        "download HTTP " + code + ": redirected to " + (next == null ? "nowhere" : next.getHost()) + ", not followed",
+                        code,
+                        null
+                    );
+                }
+                if (++hops > TransferPaths.MAX_REDIRECTS) {
+                    throw new TransferException(TransferException.Reason.SESSION_REFUSED, "download: too many redirects", code, null);
+                }
+                target = next;
             }
-            if (have > 0) c.setRequestProperty("Range", "bytes=" + have + "-");
-            int code = c.getResponseCode();
             long total;
             boolean append;
             if (code == 206) {
@@ -199,6 +227,9 @@ public final class Downloader {
     private static long finish(File part, File dest, long size) throws TransferException {
         if (part.length() != size) {
             throw new TransferException(TransferException.Reason.SIZE_MISMATCH, "part file is " + part.length() + ", expected " + size);
+        }
+        if (Files.isSymbolicLink(dest.toPath())) {
+            throw new TransferException(TransferException.Reason.UNKNOWN, "refusing to replace a symbolic link at " + dest);
         }
         if (dest.exists() && !dest.delete()) {
             throw new TransferException(TransferException.Reason.UNKNOWN, "can't replace " + dest);

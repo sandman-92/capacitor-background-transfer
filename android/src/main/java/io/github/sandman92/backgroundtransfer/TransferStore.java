@@ -91,12 +91,18 @@ public final class TransferStore {
         return out;
     }
 
-    /** Stores {@code r} (stamping {@code updatedAt}) and returns a copy of what was stored. */
+    /**
+     * Stores {@code r} (stamping {@code updatedAt}) and returns a copy of what was stored. A record
+     * that has stopped (finished, interrupted, failed or cancelled) is kept without its headers: a
+     * restart brings its own, and a token has no business on the disk after the request it was for.
+     */
     public synchronized TransferRecord put(TransferRecord r) {
         r.updatedAt = System.currentTimeMillis();
-        records.put(r.key(), copy(r));
+        TransferRecord stored = copy(r);
+        if (!stored.isActive()) stored.headers.clear();
+        records.put(stored.key(), stored);
         save();
-        return copy(r);
+        return copy(stored);
     }
 
     public synchronized void remove(String direction, String id) {
