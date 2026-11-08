@@ -3,11 +3,15 @@ name: Release
 # Publishing a GitHub release tagged vX.Y.Z publishes that version to npm. The tag must name the
 # version in package.json, CHANGELOG.md must have a dated entry for it, and the tagged commit must
 # be on main. A release marked pre-release goes out under the `next` dist-tag; a full release
-# under `latest`; and unticking pre-release later moves `latest` to that version. See
-# CONTRIBUTING.md → Releasing for the steps and the one-time npm setup.
+# under `latest`; and unticking pre-release later moves `latest` to that version. Started by hand
+# (Actions → Release → Run workflow), it runs the same checks and ends in `npm publish --dry-run`
+# instead, in a job that can neither publish nor move a dist-tag. See CONTRIBUTING.md → Releasing
+# for the steps and the one-time npm setup. npm's trusted publisher names this file, release.yml:
+# keep the name.
 on:
   release:
     types: [published, released]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,62 +23,24 @@ env:
 jobs:
   publish:
     name: Publish to npm
-    if: github.event.action == 'published'
+    if: github.event_name == 'release' && github.event.action == 'published'
     runs-on: macos-15 # the iOS checks need Xcode
     permissions:
       contents: read
       id-token: write # provenance, and trusted publishing when no NPM_TOKEN is set
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0 # to see that the tag is on main
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - name: Release checks
+        # The checkout is this run's own commit, so ./ and $/ name the same action; ./ is the form
+        # actionlint knows.
+        uses: ./.github/actions/release-checks # zizmor: ignore[self-repository]
         with:
+          tag: ${{ github.event.release.tag_name }}
           node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/setup-java@v4
-        with:
-          distribution: zulu
           java-version: ${{ env.JAVA_VERSION }}
-
-      - name: The tag names the version, the changelog has it, and it is on main
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          set -eu
-          version="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "v$version" ]; then
-            echo "::error::the release is tagged $TAG but package.json says $version"
-            exit 1
-          fi
-          entry="$(grep -m1 "^## $version" CHANGELOG.md || true)"
-          if [ -z "$entry" ]; then
-            echo "::error::CHANGELOG.md has no '## $version' entry"
-            exit 1
-          fi
-          case "$entry" in
-            *nreleased*) echo "::error::CHANGELOG.md still says '$entry': date the entry"; exit 1 ;;
-          esac
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::the tagged commit $GITHUB_SHA is not on main"
-            exit 1
-          fi
-
-      - run: npm ci
-      - name: Lint
-        run: npm run eslint && npm run prettier -- --check
-      - name: Typecheck, Vitest and build
-        run: npm run typecheck && npm test && npm run build
-      - name: Android unit tests
-        run: npm run test:android
-      - name: iOS core tests
-        run: npm run test:ios
-      - name: iOS build
-        run: npm run verify:ios
-
-      - name: npm that can publish with provenance and trusted publishing
-        run: npm install -g npm@11 && npm --version
-      - name: What the package will hold
-        run: npm pack --dry-run
       - name: Publish
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -91,19 +57,57 @@ jobs:
           npm publish --provenance --access public --tag "$DIST_TAG"
           echo "published capacitor-background-transfer@$(node -p "require('./package.json').version") as $DIST_TAG"
 
+  dry-run:
+    name: Dry run (publishes nothing)
+    # Started by hand. The same checks as the publish job, less the tag, then npm publish --dry-run.
+    # It can't publish: no id-token permission (so no trusted publishing or provenance), no
+    # NPM_TOKEN, and it never runs on a release.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Release checks
+        # The checkout is this run's own commit, so ./ and $/ name the same action; ./ is the form
+        # actionlint knows.
+        uses: ./.github/actions/release-checks # zizmor: ignore[self-repository]
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: npm publish --dry-run
+        run: |
+          set -eu
+          package=capacitor-background-transfer
+          version="$(node -p "require('./package.json').version")"
+          # npm refuses even a dry run over a version it already has, which is the usual state of
+          # main between releases. Then this run's copy gets a throwaway pre-release version.
+          if [ -n "$(npm view "$package@$version" version 2>/dev/null || true)" ]; then
+            version="$version-dryrun.$GITHUB_RUN_ID"
+            echo "$package@${version%-dryrun.*} is on npm already: dry-running it as $version"
+            npm version "$version" --no-git-tag-version --allow-same-version
+          fi
+          npm publish --dry-run --access public --tag dry-run
+
   promote:
     name: Promote to latest
     # A pre-release unticked later: the version, already on npm under `next`, gets `latest` too. A
     # full release published outright fires this event alongside `published`; the version isn't on
     # npm yet then, and the publish job gives it `latest` itself.
-    if: github.event.action == 'released' && !github.event.release.prerelease
+    if: github.event_name == 'release' && github.event.action == 'released' && !github.event.release.prerelease
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          # No caches on the way to npm (see .github/actions/release-checks): off explicitly. v4
+          # warns that it doesn't know package-manager-cache yet; from v5 it stops the default cache.
+          cache: ''
+          package-manager-cache: false
       - name: Move the latest dist-tag to this version
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
