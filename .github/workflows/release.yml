@@ -1,0 +1,90 @@
+name: Release
+
+# Publishing a GitHub release tagged vX.Y.Z publishes that version to npm. The tag must name the
+# version in package.json, CHANGELOG.md must have a dated entry for it, and the tagged commit must
+# be on main. A release marked pre-release goes out under the `next` dist-tag; a full release
+# under `latest`. See CONTRIBUTING.md → Releasing for the steps and the one-time npm setup.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 20
+  JAVA_VERSION: 21
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: macos-15 # the iOS checks need Xcode
+    permissions:
+      contents: read
+      id-token: write # provenance, and trusted publishing when no NPM_TOKEN is set
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # to see that the tag is on main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: The tag names the version, the changelog has it, and it is on main
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -eu
+          version="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::the release is tagged $TAG but package.json says $version"
+            exit 1
+          fi
+          entry="$(grep -m1 "^## $version" CHANGELOG.md || true)"
+          if [ -z "$entry" ]; then
+            echo "::error::CHANGELOG.md has no '## $version' entry"
+            exit 1
+          fi
+          case "$entry" in
+            *nreleased*) echo "::error::CHANGELOG.md still says '$entry': date the entry"; exit 1 ;;
+          esac
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::the tagged commit $GITHUB_SHA is not on main"
+            exit 1
+          fi
+
+      - run: npm ci
+      - name: Lint
+        run: npm run eslint && npm run prettier -- --check
+      - name: Typecheck, Vitest and build
+        run: npm run typecheck && npm test && npm run build
+      - name: Android unit tests
+        run: npm run test:android
+      - name: iOS core tests
+        run: npm run test:ios
+      - name: iOS build
+        run: npm run verify:ios
+
+      - name: npm that can publish with provenance and trusted publishing
+        run: npm install -g npm@11 && npm --version
+      - name: What the package will hold
+        run: npm pack --dry-run
+      - name: Publish
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
+        run: |
+          set -eu
+          if [ -n "$NPM_TOKEN" ]; then
+            # A granular access token (the first release, before the trusted publisher exists).
+            echo "//registry.npmjs.org/:_authToken=\${NPM_TOKEN}" > "$HOME/.npmrc"
+          else
+            # No token: npm exchanges the job's OIDC token with the registry's trusted publisher.
+            echo "no NPM_TOKEN secret: publishing as this repository's trusted publisher"
+          fi
+          npm publish --provenance --access public --tag "$DIST_TAG"
+          echo "published capacitor-background-transfer@$(node -p "require('./package.json').version") as $DIST_TAG"

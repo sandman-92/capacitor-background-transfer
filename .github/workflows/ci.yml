@@ -75,7 +75,7 @@ jobs:
           MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin nohup "$RUNNER_TEMP/minio" server "$RUNNER_TEMP/minio-data" --address 127.0.0.1:9000 > "$RUNNER_TEMP/minio.log" 2>&1 &
           nohup npx --yes azurite@3.37.0 azurite-blob --blobHost 127.0.0.1 --blobPort 10000 --location "$RUNNER_TEMP/azurite" --skipApiVersionCheck --loose > "$RUNNER_TEMP/azurite.log" 2>&1 &
           S3_UPSTREAM=http://127.0.0.1:9000 AZURE_UPSTREAM=http://127.0.0.1:10000 nohup node test-servers/harness.mjs > "$RUNNER_TEMP/harness.log" 2>&1 &
-          for i in $(seq 1 60); do curl -fs http://localhost:8790/health && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -fs http://localhost:8790/health && break; sleep 2; done
           curl -fs http://localhost:8790/health
       - name: iOS core tests against the servers
         env:
