@@ -27,7 +27,8 @@ final class TransferManager: NSObject {
     private var lastProgress: [String: Date] = [:]
     /// Upload responses' bodies (the finalized object's metadata), kept to check its size.
     private var uploadBodies: [Int: Data] = [:]
-    /// Session checks still waiting for an answer; the system's completion handler is held until none are.
+    /// Session checks still waiting for an answer, and parts being made ready for their task; the
+    /// system's completion handler is held until none are.
     private var checks = 0
     private var heldHandlers: [() -> Void] = []
     /// Calls that arrive before `start()` has reconciled the records wait here.
@@ -43,14 +44,37 @@ final class TransferManager: NSObject {
     private lazy var uploadSession: URLSession = makeSession(TransferManager.uploadSessionId)
     private lazy var downloadSession: URLSession = makeSession(TransferManager.downloadSessionId)
 
+    /// Whether the app is on screen. Parts and blocks go one at a time then; once it leaves the
+    /// screen every remaining one is handed to the session at once, because the system holds back
+    /// each background wake that would start the next part, doubling the wait every time.
+    private var onScreen: Bool
+    /// Uploads whose part copies are being made, so a second hand-over doesn't copy them again.
+    private var preparing = Set<String>()
+
     private override init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         directory = support.appendingPathComponent("BackgroundTransfer", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         store = TransferStore(file: directory.appendingPathComponent("transfers.json"))
+        // Made on the main thread (the plugin's load, or the system's background session events).
+        onScreen = Thread.isMainThread ? UIApplication.shared.applicationState != .background : false
         super.init()
         delegateQueue.maxConcurrentOperationCount = 1
         delegateQueue.underlyingQueue = queue
+        let center = NotificationCenter.default
+        center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { [weak self] _ in
+            guard let self = self else { return }
+            // Background time so the copies are made and handed over before the app is suspended.
+            let time = BackgroundTime("BackgroundTransfer hand-over")
+            self.queue.async {
+                defer { time.end() }
+                self.onScreen = false
+                self.handOverEverything()
+            }
+        }
+        center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.queue.async { self?.onScreen = true }
+        }
     }
 
     private func makeSession(_ identifier: String) -> URLSession {
@@ -95,11 +119,16 @@ final class TransferManager: NSObject {
                     r.reason = Reason.stoppedBySystem
                     r.message = "no transfer was running for this when the app opened"
                     r.taskIdentifier = nil
-                    self.removeRemainder(&r)
+                    if r.partTasks == nil {
+                        r.currentPart = nil
+                        self.removeRemainder(&r)
+                    }
+                    // Parts handed over stay recorded with their copies: tasks that ended while the
+                    // app was away are reported after this, find their parts, and carry the upload on.
                     self.save(r, event: "stateChange")
                 }
-                // Remainder copies no record names: left by a process that ended mid-copy.
-                let named = Set(self.store.all().compactMap(\.remainderPath))
+                // Copies no record names: left by a process that ended mid-copy.
+                let named = Set(self.store.all().flatMap { PartsUpload.copies($0) })
                 Files.removeOrphans(in: self.directory.appendingPathComponent("remainders"), keeping: named)
                 self.started = true
                 let calls = self.waiting
@@ -120,7 +149,9 @@ final class TransferManager: NSObject {
     func handleEvents(identifier: String, completionHandler: @escaping () -> Void) -> Bool {
         guard identifier == TransferManager.uploadSessionId || identifier == TransferManager.downloadSessionId else { return false }
         NSLog("BackgroundTransfer: woken for %@", identifier)
+        let background = UIApplication.shared.applicationState == .background
         queue.async {
+            if background { self.onScreen = false }
             self.completionHandlers[identifier] = completionHandler
             _ = identifier == TransferManager.uploadSessionId ? self.uploadSession : self.downloadSession
         }
@@ -147,6 +178,11 @@ final class TransferManager: NSObject {
                 done(existing)
                 return
             }
+            if var old = self.store.get(key: wanted.key), old.partTasks != nil {
+                // Parts an earlier run handed over: stopped, and their copies removed.
+                self.dropParts(&old)
+                self.store.put(old)
+            }
             var r = wanted
             r.state = .queued
             r.queuedAt = self.store.nextQueuedAt()
@@ -155,8 +191,15 @@ final class TransferManager: NSObject {
             r.httpStatus = nil
             r.taskIdentifier = nil
             r.refusedStatus = nil
+            r.currentPart = nil
             if r.direction == .download {
                 r.bytes = (try? Files.fileSize(Files.partURL(for: URL(fileURLWithPath: r.path)))) ?? 0
+            } else if UploadProtocol.resolve(r.protocol)?.inParts == true, let existing = self.store.get(key: wanted.key),
+                      PartsUpload.carriesOver(existing, r, fileSize: (try? Files.fileSize(URL(fileURLWithPath: r.path))) ?? -2) {
+                // The same upload: what it sent, and whether its commit went, carry over.
+                r.parts = existing.parts
+                r.committing = existing.committing
+                r.bytes = existing.bytes
             }
             r = self.save(r, event: "stateChange")
             done(r)
@@ -167,17 +210,24 @@ final class TransferManager: NSObject {
     func cancel(key: String) {
         whenStarted {
             guard var r = self.store.get(key: key) else { return }
-            if r.isActive, r.taskIdentifier != nil {
+            if r.isActive, r.taskIdentifier != nil || r.partTasks != nil {
                 self.cancelling.insert(key)
                 let session = r.direction == .upload ? self.uploadSession : self.downloadSession
                 session.getAllTasks { tasks in
                     self.queue.async {
-                        let task = tasks.first { $0.taskDescription == key }
-                        if let task = task {
-                            task.cancel()
-                        } else {
-                            self.cancelling.remove(key)
-                            self.markCancelled(&r)
+                        guard var now = self.store.get(key: key), now.isActive else { return }
+                        // Every task of the transfer: an upload in parts may have several handed over.
+                        let mine = tasks.filter { $0.taskDescription == key }
+                        let unfinished = mine.filter { $0.state != .completed }
+                        let commitOut = UploadProtocol.resolve(now.protocol)?.inParts == true && now.currentPart == 0
+                        switch PartsUpload.cancelPlan(commitOut: commitOut, unfinishedTasks: unfinished.count,
+                                                      endedTasks: mine.count - unfinished.count) {
+                        case .cancelTasks:
+                            unfinished.forEach { $0.cancel() }
+                        case .awaitCommit, .awaitEnd:
+                            break // That task's end decides, with the cancel noted.
+                        case .markCancelled:
+                            self.markCancelled(&now)
                         }
                     }
                 }
@@ -200,11 +250,7 @@ final class TransferManager: NSObject {
 
     private func startUpload(_ record: TransferRecord) {
         var r = record
-        // Where another protocol's adapter would plug in.
-        switch UploadProtocol.resolve(r.protocol) {
-        case .firebaseResumable:
-            break
-        case nil:
+        guard let chosen = UploadProtocol.resolve(r.protocol) else {
             fail(&r, Reason.unknown, "unknown upload protocol \(r.protocol ?? "")")
             return
         }
@@ -219,6 +265,17 @@ final class TransferManager: NSObject {
         r.total = size
         guard let url = URL(string: r.url) else {
             fail(&r, Reason.sessionRefused, "not a URL")
+            return
+        }
+        // Each protocol's adapter plugs in here.
+        switch chosen {
+        case .firebaseResumable:
+            break
+        case .put:
+            sendWhole(r, from: file)
+            return
+        case .s3Multipart, .azureBlocks:
+            startParts(r)
             return
         }
         // Ask the session what it holds. A plain (foreground) request: the app is on screen now.
@@ -323,6 +380,271 @@ final class TransferManager: NSObject {
         r.taskIdentifier = task.taskIdentifier
         save(r, event: "progress")
         task.resume()
+    }
+
+    // MARK: put, and uploads in parts
+
+    /// `put`: the whole file in one background task, sent in place (no copy).
+    private func sendWhole(_ record: TransferRecord, from file: URL) {
+        var r = record
+        guard let request = PartsUpload.putRequest(r) else { return fail(&r, Reason.sessionRefused, "not a URL") }
+        let task = uploadSession.uploadTask(with: request, fromFile: file)
+        task.taskDescription = r.key
+        r.startOffset = 0
+        r.bytes = 0
+        r.taskIdentifier = task.taskIdentifier
+        save(r, event: "progress")
+        task.resume()
+    }
+
+    /// `s3-multipart` and `azure-blocks`: asks the server what it holds (ListParts or Get Block List,
+    /// on a plain session: the app is on screen), then hands the parts to the background session
+    /// one at a time.
+    private func startParts(_ record: TransferRecord) {
+        var r = record
+        if let stop = PartsUpload.beforeStart(r, size: r.total) {
+            apply(stop, to: &r, httpStatus: 0)
+            return
+        }
+        guard var probe = PartsUpload.probe(r) else {
+            sendNextPart(r)
+            return
+        }
+        probe.timeoutInterval = UploadOutcome.checkTimeout
+        let session = URLSession(configuration: .ephemeral)
+        session.dataTask(with: probe) { body, response, error in
+            session.finishTasksAndInvalidate()
+            self.queue.async {
+                guard var now = self.store.get(key: r.key), now.state == .queued else { return } // cancelled meanwhile
+                now.total = r.total
+                let status = error == nil ? (response as? HTTPURLResponse)?.statusCode : nil
+                if let stop = PartsUpload.afterProbe(&now, status: status, body: body, size: now.total) {
+                    self.apply(stop, to: &now, httpStatus: status ?? 0)
+                    return
+                }
+                now.bytes = min(PartsUpload.storedBytes(now, size: now.total), max(now.total - 1, 0))
+                self.sendNextPart(self.store.put(now))
+            }
+        }.resume()
+    }
+
+    /// Hands the next part or block to the background session (one, while the app is on screen;
+    /// every remaining one, once it has left it), or the commit once every part is stored. Runs after
+    /// each part's answer too, with the app perhaps woken in the background for it: the system's
+    /// completion handler is held until the tasks are handed over, so the app isn't suspended half-way.
+    private func sendNextPart(_ record: TransferRecord) {
+        var r = record
+        guard !cancelling.contains(r.key) else { return } // Nothing more goes once the app has asked to cancel.
+        let size = r.total
+        r.taskIdentifier = nil
+        guard let step = PartsUpload.next(r, size: size) else {
+            store.put(r) // The last parts are still in tasks' hands.
+            return
+        }
+        switch step {
+        case .part:
+            if onScreen {
+                handOver(r, [step])
+            } else {
+                handOverRemaining(r)
+            }
+        case .commit:
+            guard let (request, body) = PartsUpload.commitRequest(r, size: size) else {
+                return fail(&r, Reason.sessionRefused, "not a URL")
+            }
+            let copy = directory.appendingPathComponent("remainders/\(UUID().uuidString)")
+            do {
+                try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try body.write(to: copy, options: [.completeFileProtectionUntilFirstUserAuthentication])
+            } catch {
+                let ns = error as NSError
+                return fail(&r, Reason.isDiskFull(ns) ? Reason.diskFull : Reason.unknown, "commit body: \(ns.localizedDescription)")
+            }
+            let task = uploadSession.uploadTask(with: request, fromFile: copy)
+            task.taskDescription = r.key
+            r.remainderPath = copy.path
+            r.currentPart = 0
+            // From here a lost answer can't be told from a committed object.
+            r.committing = true
+            r.startOffset = size
+            r.taskIdentifier = task.taskIdentifier
+            save(r, event: "progress")
+            task.resume()
+        }
+    }
+
+    /// The app has left the screen: every upload in parts that is running hands all its remaining
+    /// parts over now.
+    private func handOverEverything() {
+        for r in store.all() where r.direction == .upload && r.isActive && r.total >= 0
+            && UploadProtocol.resolve(r.protocol)?.inParts == true && r.currentPart != 0 && r.committing != true {
+            if !PartsUpload.pending(r, size: r.total).isEmpty { handOverRemaining(r) }
+        }
+    }
+
+    /// Hands every part neither stored nor in a task's hands to the session, if their copies fit on
+    /// the disk with room to spare; otherwise the next one only, saying so.
+    private func handOverRemaining(_ record: TransferRecord) {
+        var r = record
+        let pending = PartsUpload.pending(r, size: r.total)
+        guard let first = pending.first else { return }
+        let bytes = PartsUpload.pendingBytes(r, size: r.total)
+        let free = (try? directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage ?? 0
+        if PartsUpload.handOverFits(bytes: bytes, free: free) {
+            handOver(r, pending)
+        } else {
+            let message = "not enough free disk to hand over the \(bytes) bytes left (\(free) free): sending one part at a time"
+            NSLog("BackgroundTransfer: %@: %@", r.id, message)
+            r.message = message
+            handOver(store.put(r), [first])
+        }
+    }
+
+    /// Copies each part's range to a temporary file (off the serial queue, with background time),
+    /// then hands them to the session, recording which part each task carries. Each copy is removed
+    /// when its task ends, and by the launch sweep after a process that ended mid-copy.
+    private func handOver(_ record: TransferRecord, _ steps: [PartsUpload.Step]) {
+        let r = record
+        guard !preparing.contains(r.key) else { return }
+        let parts: [(n: Int, offset: Int64, length: Int64, copy: URL)] = steps.compactMap { step in
+            guard case .part(let n, let offset, let length) = step else { return nil }
+            return (n, offset, length, directory.appendingPathComponent("remainders/\(UUID().uuidString)"))
+        }
+        guard !parts.isEmpty else { return }
+        // The file's size and what is stored so far, for the answers that read the record back.
+        store.put(r)
+        preparing.insert(r.key)
+        hold()
+        let time = BackgroundTime("BackgroundTransfer part copy")
+        DispatchQueue.global(qos: .utility).async {
+            var copyError: NSError?
+            var made: [URL] = []
+            for p in parts {
+                do {
+                    try Files.writeRange(of: URL(fileURLWithPath: r.path), from: p.offset, length: p.length, to: p.copy)
+                    made.append(p.copy)
+                } catch {
+                    copyError = error as NSError
+                    break
+                }
+            }
+            self.queue.async {
+                defer {
+                    time.end()
+                    self.release()
+                }
+                self.preparing.remove(r.key)
+                let removeCopies = { for p in parts { try? FileManager.default.removeItem(at: p.copy) } }
+                guard var now = self.store.get(key: r.key), now.isActive, now.queuedAt == r.queuedAt, now.currentPart != 0,
+                      !self.cancelling.contains(r.key) else {
+                    // Cancelled, stopped or started again while copying.
+                    removeCopies()
+                    return
+                }
+                if let ns = copyError {
+                    removeCopies()
+                    if Reason.isDiskFull(ns) && parts.count > 1 {
+                        // The disk filled up after all: one part at a time instead.
+                        now.message = "the disk filled up handing every part over: sending one part at a time"
+                        NSLog("BackgroundTransfer: %@: %@", now.id, now.message ?? "")
+                        self.handOver(self.store.put(now), [.part(n: parts[0].n, offset: parts[0].offset, length: parts[0].length)])
+                        return
+                    }
+                    let missing = !FileManager.default.fileExists(atPath: now.path)
+                    self.fail(&now, Reason.isDiskFull(ns) ? Reason.diskFull : (missing ? Reason.fileMissing : Reason.sizeMismatch),
+                              "part \(parts[0].n) copy: \(ns.localizedDescription)")
+                    return
+                }
+                var tasks: [URLSessionUploadTask] = []
+                for p in parts {
+                    guard let request = PartsUpload.partRequest(now, n: p.n, size: now.total) else {
+                        removeCopies()
+                        tasks.forEach { $0.cancel() }
+                        self.fail(&now, Reason.sessionRefused, "part \(p.n) has no URL")
+                        return
+                    }
+                    let task = self.uploadSession.uploadTask(with: request, fromFile: p.copy)
+                    task.taskDescription = now.key
+                    PartsUpload.assign(&now, task: task.taskIdentifier, part: p.n, copy: p.copy.path)
+                    tasks.append(task)
+                }
+                now.taskIdentifier = nil
+                now.startOffset = PartsUpload.storedBytes(now, size: now.total)
+                // Recorded before any task can end, so every answer finds its part.
+                self.save(now, event: "progress")
+                tasks.forEach { $0.resume() }
+                // The app left the screen while this one part was being copied: the rest go too.
+                if !self.onScreen && !PartsUpload.pending(now, size: now.total).isEmpty { self.handOverRemaining(now) }
+            }
+        }
+    }
+
+    /// Cancels every task the upload's record has handed over and removes their copies.
+    private func dropParts(_ r: inout TransferRecord) {
+        guard let tasks = r.partTasks else { return }
+        for t in tasks.values { try? FileManager.default.removeItem(atPath: t.copy) }
+        r.partTasks = nil
+        let key = r.key
+        let ids = Set(tasks.keys.compactMap(Int.init))
+        uploadSession.getAllTasks { all in
+            for task in all where task.taskDescription == key && ids.contains(task.taskIdentifier) { task.cancel() }
+        }
+    }
+
+    /// The answer to a `put`'s task or to a part's or the commit's.
+    private func answered(_ record: TransferRecord, part n: Int, status: Int, etag: String?, body: Data?) {
+        var r = record
+        guard UploadProtocol.resolve(r.protocol)?.inParts == true else {
+            apply(PartsUpload.afterPut(status: status), to: &r, httpStatus: status)
+            return
+        }
+        if n == 0 {
+            r.currentPart = nil
+            if cancelling.contains(r.key) {
+                // Cancelled while the commit was out: only the server's confirmation outranks the cancel.
+                let outcome = PartsUpload.afterCommit(&r, status: status, body: body)
+                if outcome == .finished { apply(outcome, to: &r, httpStatus: status); return }
+                // An answer that leaves it open whether the commit was applied (S3's 404 to a resent
+                // completion) keeps `committing`, so a restart reports session-closed.
+                if case .failed(let reason, _) = outcome, reason == Reason.sessionClosed { r.committing = true }
+                markCancelled(&r)
+                return
+            }
+            let outcome = PartsUpload.afterCommit(&r, status: status, body: body)
+            apply(outcome, to: &r, httpStatus: status)
+            return
+        }
+        guard n > 0 else {
+            apply(.failed(reason: Reason.unknown, message: "an answer came for no part"), to: &r, httpStatus: status)
+            return
+        }
+        if let stop = PartsUpload.afterPart(&r, n: n, status: status, etag: etag, size: r.total) {
+            apply(stop, to: &r, httpStatus: status)
+            return
+        }
+        // Stored: on to the next one, or the commit once the others in tasks' hands are in too.
+        r.state = .running
+        r.reason = nil
+        r.message = nil
+        r.httpStatus = nil
+        // Never the whole object before the commit is confirmed.
+        r.bytes = min(PartsUpload.storedBytes(r, size: r.total), max(r.total - 1, 0))
+        r = store.put(r)
+        listener?.transferChanged(r, event: "progress")
+        sendNextPart(r)
+    }
+
+    /// Keeps the system's completion handler while work the app must finish is under way.
+    private func hold() { checks += 1 }
+
+    private func release() {
+        checks -= 1
+        if checks == 0 {
+            let handlers = heldHandlers
+            heldHandlers = []
+            handlers.forEach { DispatchQueue.main.async(execute: $0) }
+        }
     }
 
     // MARK: Download
@@ -431,12 +753,42 @@ final class TransferManager: NSObject {
     private func completed(_ task: URLSessionTask, error: Error?) {
         let body = uploadBodies.removeValue(forKey: task.taskIdentifier)
         guard let key = task.taskDescription, var r = store.get(key: key) else { return }
-        guard r.taskIdentifier == task.taskIdentifier || r.taskIdentifier == nil else { return } // an older task
-        let byUs = cancelling.remove(key) != nil
+        // Once finished, failed or cancelled, a transfer has said its last word: one final state each.
+        if r.state == .finished || r.state == .failed || r.state == .cancelled { return }
+        // An upload in parts: which part the task carried (none: cancelled with the others, or older).
+        var part = -1
+        if r.direction == .upload, UploadProtocol.resolve(r.protocol)?.inParts == true {
+            if let t = PartsUpload.release(&r, task: task.taskIdentifier) {
+                try? FileManager.default.removeItem(atPath: t.copy)
+                part = t.part
+            } else if r.currentPart == 0 && (r.taskIdentifier == task.taskIdentifier || r.taskIdentifier == nil) {
+                part = 0
+            } else {
+                return
+            }
+        } else {
+            guard r.taskIdentifier == task.taskIdentifier || r.taskIdentifier == nil else { return } // an older task
+        }
+        let byUs = cancelling.contains(key)
         r.taskIdentifier = nil
         if r.direction == .upload {
-            removeRemainder(&r)
-            if let error = error as NSError? {
+            if part <= 0 { removeRemainder(&r) }
+            let ns = error as NSError?
+            let cancelledError = ns?.domain == NSURLErrorDomain && ns?.code == NSURLErrorCancelled
+            switch PartsUpload.afterCancel(requested: byUs, inParts: UploadProtocol.resolve(r.protocol)?.inParts == true,
+                                           isCommit: part == 0, cancelledError: cancelledError,
+                                           otherError: ns != nil && !cancelledError, othersInFlight: r.partTasks != nil) {
+            case .cancelled:
+                // `committing` stays as it was: a commit cut off may have been applied.
+                markCancelled(&r)
+                return
+            case .ignore:
+                store.put(r) // A part landed after the cancel: nothing more goes; the others' ends report it.
+                return
+            case .asUsual, .confirmOrCancel:
+                break // An answered commit is decided in `answered`: finished only if confirmed.
+            }
+            if let error = ns {
                 let (reason, resumable) = Reason.forError(error, cancelledByUs: byUs)
                 if reason == Reason.cancelled { markCancelled(&r); return }
                 if resumable { interrupt(&r, reason, error.localizedDescription) } else { fail(&r, reason, error.localizedDescription) }
@@ -444,6 +796,10 @@ final class TransferManager: NSObject {
             }
             let http = task.response as? HTTPURLResponse
             let status = http?.statusCode ?? 0
+            if UploadProtocol.resolve(r.protocol) != .firebaseResumable {
+                answered(r, part: part, status: status, etag: http?.value(forHTTPHeaderField: "ETag"), body: body)
+                return
+            }
             let received = http?.value(forHTTPHeaderField: "X-Goog-Upload-Size-Received").flatMap { Int64($0) }
             let outcome = UploadOutcome.afterResponse(status: status, uploadStatus: http?.value(forHTTPHeaderField: "X-Goog-Upload-Status"),
                                                       received: received, body: body, total: r.total)
@@ -496,17 +852,12 @@ final class TransferManager: NSObject {
             apply(.failed(reason: Reason.sessionRefused, message: "not a URL"), to: &r, httpStatus: status)
             return
         }
-        checks += 1
+        hold()
         let time = BackgroundTime("BackgroundTransfer session check")
         querySession(url, headers: r.headers) { response, error in
             defer {
                 time.end()
-                self.checks -= 1
-                if self.checks == 0 {
-                    let handlers = self.heldHandlers
-                    self.heldHandlers = []
-                    handlers.forEach { DispatchQueue.main.async(execute: $0) }
-                }
+                self.release()
             }
             guard var now = self.store.get(key: r.key), now.isActive, now.taskIdentifier == nil, now.refusedStatus == status else { return }
             let q = response as? HTTPURLResponse
@@ -541,6 +892,9 @@ final class TransferManager: NSObject {
     }
 
     private func interrupt(_ r: inout TransferRecord, _ reason: String, _ message: String) {
+        // The other parts handed over stop too: starting the upload again asks the server what it holds.
+        dropParts(&r)
+        r.currentPart = nil
         r.state = .interrupted
         r.reason = reason
         r.message = message
@@ -560,6 +914,7 @@ final class TransferManager: NSObject {
     /// Removes a transfer's temporary files: an upload's remainder copy, a download's part file and resume data.
     private func cleanUp(_ r: inout TransferRecord) {
         removeRemainder(&r)
+        dropParts(&r)
         if r.direction == .download {
             try? FileManager.default.removeItem(at: Files.partURL(for: URL(fileURLWithPath: r.path)))
             try? FileManager.default.removeItem(at: resumeDataURL(r.key))
@@ -577,6 +932,7 @@ final class TransferManager: NSObject {
     @discardableResult
     private func save(_ r: TransferRecord, event: String) -> TransferRecord {
         let stored = store.put(r)
+        if !stored.isActive { cancelling.remove(stored.key) }
         lastSaved[r.key] = Date()
         listener?.transferChanged(stored, event: event)
         return stored
@@ -584,7 +940,8 @@ final class TransferManager: NSObject {
 
     /// Progress: told to the app at most four times a second, written to disk every two seconds.
     private func progressed(_ task: URLSessionTask, bytes: Int64, total: Int64) {
-        guard let key = task.taskDescription, var r = store.get(key: key), r.taskIdentifier == task.taskIdentifier else { return }
+        guard let key = task.taskDescription, var r = store.get(key: key),
+              r.taskIdentifier == task.taskIdentifier || r.partTasks?[String(task.taskIdentifier)] != nil else { return }
         let wasQueued = r.state == .queued
         r.state = .running
         r.bytes = bytes
@@ -609,7 +966,16 @@ extension TransferManager: URLSessionDataDelegate, URLSessionDownloadDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64,
                     totalBytesExpectedToSend: Int64) {
         guard let key = task.taskDescription, let r = store.get(key: key) else { return }
-        progressed(task, bytes: r.startOffset + totalBytesSent, total: r.total)
+        var bytes = r.startOffset + totalBytesSent
+        if r.partTasks?[String(task.taskIdentifier)] != nil {
+            // One of the parts handed over: the session sends them one by one.
+            bytes = PartsUpload.storedBytes(r, size: r.total) + totalBytesSent
+        }
+        if UploadProtocol.resolve(r.protocol) != .firebaseResumable {
+            // Never the whole object before the server has confirmed it (a commit's body isn't file bytes).
+            bytes = min(r.currentPart == 0 ? r.total : bytes, max(r.total - 1, 0))
+        }
+        progressed(task, bytes: bytes, total: r.total)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {

@@ -71,6 +71,10 @@ public class BackgroundTransferPlugin: CAPPlugin, CAPBridgedPlugin, TransferList
                 return
             }
             record.protocol = chosen.rawValue
+            if let refused = readProtocolOptions(call, chosen, &record) {
+                call.reject(refused)
+                return
+            }
         }
         if let headers = call.getObject("headers") {
             for (name, value) in headers {
@@ -80,6 +84,34 @@ public class BackgroundTransferPlugin: CAPPlugin, CAPBridgedPlugin, TransferList
         TransferManager.shared.enqueue(record) { stored in
             call.resolve(["transfer": stored.js])
         }
+    }
+
+    /// Reads `partUrls`, `partSize`, `listPartsUrl` and `blockSize` into `record`, and returns what is
+    /// wrong with them (as the JavaScript side words it), or nil.
+    private func readProtocolOptions(_ call: CAPPluginCall, _ chosen: UploadProtocol, _ record: inout TransferRecord) -> String? {
+        let options = call.options ?? [:]
+        func number(_ name: String) -> Double? {
+            guard let v = options[name], !(v is NSNull) else { return nil }
+            if let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() { return n.doubleValue }
+            return .nan
+        }
+        var partUrls: [Any]?
+        if let v = options["partUrls"], !(v is NSNull) { partUrls = (v as? [Any]) ?? [] }
+        let listPartsUrl = options["listPartsUrl"].flatMap { $0 is NSNull ? nil : $0 }
+        let partSize = number("partSize"), blockSize = number("blockSize")
+        if let refused = UploadOptionsCheck.check(protocol: chosen, url: record.url, partUrls: partUrls, partSize: partSize,
+                                                  listPartsUrl: listPartsUrl, blockSize: blockSize) {
+            return refused
+        }
+        record.partUrls = partUrls?.compactMap { $0 as? String }
+        record.partSize = partSize.map { Int64($0) }
+        record.listPartsUrl = listPartsUrl as? String
+        record.blockSize = blockSize.map { Int64($0) }
+        // A missing file is reported when the upload runs (file-missing), as for every protocol.
+        guard let size = try? Files.fileSize(URL(fileURLWithPath: record.path)) else { return nil }
+        return UploadOptionsCheck.checkSize(protocol: chosen, partUrlCount: record.partUrls?.count ?? 0,
+                                            partSize: record.partSize ?? UploadOptionsCheck.defaultPartSize,
+                                            blockSize: record.blockSize ?? UploadOptionsCheck.defaultPartSize, fileSize: size)
     }
 
     @objc func cancel(_ call: CAPPluginCall) {

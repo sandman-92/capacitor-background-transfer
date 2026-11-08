@@ -72,8 +72,8 @@ describe('upload protocol', () => {
   it('refuses an unknown protocol before the native side sees it', async () => {
     const native = fakeNative();
     await expect(
-      wrap(native).upload({ id: 'v1', url: 'https://x/u', path: '/v1', protocol: 's3-multipart' as never }),
-    ).rejects.toThrow('protocol must be one of firebase-resumable');
+      wrap(native).upload({ id: 'v1', url: 'https://x/u', path: '/v1', protocol: 'gcs-resumable' as never }),
+    ).rejects.toThrow('protocol must be one of firebase-resumable, put, s3-multipart, azure-blocks');
     expect(native.upload).not.toHaveBeenCalled();
   });
 
@@ -81,6 +81,31 @@ describe('upload protocol', () => {
     await expect(
       BackgroundTransfer.upload({ id: 'v1', url: 'https://x/u', path: '/v1', protocol: 'nope' as never }),
     ).rejects.toThrow('protocol must be one of firebase-resumable');
+  });
+
+  it('passes an s3-multipart upload on with its parts', async () => {
+    const native = fakeNative();
+    const partUrls = ['https://s3/b/k?partNumber=1', 'https://s3/b/k?partNumber=2'];
+    await wrap(native).upload({
+      id: 'v1',
+      url: 'https://s3/b/k?uploadId=x',
+      path: '/v1',
+      protocol: 's3-multipart',
+      partUrls,
+    });
+    expect(native.upload).toHaveBeenCalledWith(expect.objectContaining({ protocol: 's3-multipart', partUrls }));
+  });
+
+  it('refuses inconsistent options on the web before saying it is unavailable', async () => {
+    await expect(
+      BackgroundTransfer.upload({ id: 'v1', url: 'https://s3/b/k?uploadId=x', path: '/v1', protocol: 's3-multipart' }),
+    ).rejects.toThrow('partUrls is required for s3-multipart');
+    await expect(
+      BackgroundTransfer.upload({ id: 'v1', url: 'https://acct/c/b', path: '/v1', protocol: 'azure-blocks' }),
+    ).rejects.toThrow('url must be a blob SAS URL');
+    await expect(
+      BackgroundTransfer.upload({ id: 'v1', url: 'https://x/put', path: '/v1', protocol: 'put' }),
+    ).rejects.toMatchObject({ code: 'UNAVAILABLE' });
   });
 });
 

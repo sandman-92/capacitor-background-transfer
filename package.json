@@ -1,7 +1,7 @@
 {
   "name": "capacitor-background-transfer",
   "version": "0.1.0",
-  "description": "Background uploads and downloads for Capacitor: Firebase Storage resumable uploads (the X-Goog-Upload protocol) and resumable downloads that keep going with the app in the background or closed",
+  "description": "Background uploads and downloads for Capacitor: Firebase Storage resumable uploads, S3 multipart uploads, Azure block blobs and plain PUTs, and resumable downloads, that keep going with the app in the background or closed",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",
   "types": "dist/esm/index.d.ts",
@@ -31,7 +31,10 @@
     "upload",
     "download",
     "resumable",
-    "firebase-storage"
+    "firebase-storage",
+    "s3",
+    "azure-blob",
+    "multipart"
   ],
   "scripts": {
     "verify": "npm run typecheck && npm test && npm run build && npm run test:android && npm run test:ios",
@@ -51,7 +54,11 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "test:android": "cd android && ./gradlew test && cd ..",
-    "test:ios": "swift test --disable-keychain --package-path ios/CoreTests"
+    "test:ios": "swift test --disable-keychain --package-path ios/CoreTests",
+    "servers:up": "docker compose -f test-servers/compose.yaml up -d --wait",
+    "servers:down": "docker compose -f test-servers/compose.yaml down",
+    "test:servers": "node test-servers/run-tests.mjs",
+    "test:e2e": "node test-servers/e2e.mjs"
   },
   "devDependencies": {
     "@capacitor/android": "^7.0.0",

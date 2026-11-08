@@ -1,10 +1,11 @@
 package io.github.sandman92.backgroundtransfer;
 
-import java.io.File;
-import java.util.Map;
-
-/** Sends a file to an upload session in one protocol. {@link Uploader} is the Firebase Storage one. */
+/**
+ * Sends a transfer's file in one protocol ({@link UploadAdapters}). An adapter that resumes from
+ * its own record keeps that state on the record ({@code parts}, {@code committing}) and saves it
+ * with {@link Progress#saveState()} as soon as it changes, so it survives the process.
+ */
 public interface UploadAdapter {
-    /** Uploads {@code file} to the session at {@code url}; returns the file's size once the server has it all. */
-    long run(String url, File file, Map<String, String> headers, Progress progress) throws TransferException;
+    /** Uploads {@code r}'s file; returns its size once the server has confirmed the whole object. */
+    long run(TransferRecord r, Progress progress) throws TransferException;
 }
