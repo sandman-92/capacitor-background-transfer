@@ -21,3 +21,24 @@ First version.
 - `isAvailable()` carries a `warning` below Android 14 when the app's manifest doesn't declare
   WorkManager's foreground service with the `dataSync` type.
 - The web reports the plugin as unavailable.
+- Three more upload protocols (#2):
+  - `put`: the whole file in one `PUT` (an S3 presigned URL, an Azure SAS URL, any server that
+    takes one); an interrupted upload starts again from the first byte.
+  - `s3-multipart`: an S3 multipart upload with every part URL, the completion URL and
+    optionally a ListParts URL presigned up front (`partUrls`, `partSize`, `listPartsUrl`). Parts
+    go one at a time; their `ETag`s are kept, parts already stored are skipped on resume, and the
+    upload is finished only when S3 answers the completion with the completed object.
+  - `azure-blocks`: an Azure block blob through one SAS URL (`blockSize`): blocks with stable ids,
+    resumed from the uncommitted block list (or the plugin's record when the SAS can't read it),
+    committed with `Put Block List`.
+  - A commit whose answer was lost reports `session-closed` when the upload is started again,
+    never `finished`. Their options are refused at once when missing or inconsistent, with the
+    same words on the web, Android and iOS.
+  - iOS sends each part or block from a temporary copy of its range: one at a time while the
+    app is on screen, and every remaining one handed to the background session at once when it
+    leaves (temporary disk equal to what's left to send; one at a time again when that wouldn't
+    leave 256 MiB free), so a background upload doesn't wait for a wake between parts. `put`
+    sends the file in place.
+  - `test-servers/`: MinIO and Azurite in Docker with a harness that presigns URLs and injects
+    faults; `npm run test:servers` runs the JVM and Swift tests against them; the example app's
+    harness mode and `test-servers/e2e.mjs` run them end to end on an emulator or simulator.

@@ -53,6 +53,11 @@ async function main() {
     log(`${transfer.direction} ${transfer.id} ${transfer.bytes}/${transfer.total}`);
   });
   await refresh();
+  // `npm run build:harness` builds in the end-to-end runs' remote control (src/js/harness.js).
+  if (import.meta.env.VITE_HARNESS) {
+    const { startHarness } = await import('./harness.js');
+    await startHarness(log);
+  }
 }
 
 main();

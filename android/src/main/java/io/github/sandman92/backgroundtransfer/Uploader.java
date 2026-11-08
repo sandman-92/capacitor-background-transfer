@@ -78,6 +78,10 @@ public final class Uploader implements UploadAdapter {
      * times from the server's offset before giving up with {@code network}.
      */
     @Override
+    public long run(TransferRecord r, Progress progress) throws TransferException {
+        return run(r.url, new File(r.path), r.headers, progress);
+    }
+
     public long run(String url, File file, Map<String, String> headers, Progress progress) throws TransferException {
         int attempt = 0;
         while (true) {

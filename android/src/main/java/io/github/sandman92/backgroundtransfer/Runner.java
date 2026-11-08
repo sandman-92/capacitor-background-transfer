@@ -135,14 +135,33 @@ public final class Runner {
             if (TransferRecord.DOWNLOAD.equals(wanted.direction)) {
                 File part = Downloader.partFile(new File(wanted.path));
                 wanted.bytes = part.isFile() ? part.length() : 0;
-            } else if (existing != null && existing.url.equals(wanted.url)) {
+            } else if (UploadAdapters.PUT.equals(wanted.protocol)) {
+                // A PUT starts from the first byte every time.
+                wanted.bytes = 0;
+            } else if (carriesOver(existing, wanted, new File(wanted.path).length())) {
                 wanted.bytes = existing.bytes;
                 wanted.total = existing.total;
+                // The same upload: what it sent, and whether its commit went, carry over.
+                wanted.parts = existing.parts;
+                wanted.committing = existing.committing;
             }
             TransferRecord stored = store.put(wanted);
             emit("stateChange", stored);
             return new Enqueued(stored, !isActive(wanted.direction));
         }
+    }
+
+    /**
+     * Whether a restarted upload is the same one as {@code existing}, so what that one sent carries
+     * over: the same URL and protocol, and for one in parts the same part or block size and file
+     * size too (parts recorded for other ranges would otherwise be skipped as stored).
+     */
+    static boolean carriesOver(TransferRecord existing, TransferRecord wanted, long fileSize) {
+        if (existing == null || !existing.url.equals(wanted.url) || !existing.protocol.equals(wanted.protocol)) return false;
+        if (UploadAdapters.S3_MULTIPART.equals(wanted.protocol) || UploadAdapters.AZURE_BLOCKS.equals(wanted.protocol)) {
+            return existing.partSize == wanted.partSize && existing.blockSize == wanted.blockSize && existing.total == fileSize;
+        }
+        return true;
     }
 
     /**
@@ -275,10 +294,16 @@ public final class Runner {
                 String asked = stopRequests.get(r.key());
                 return asked != null ? asked : host.systemStopReason();
             }
+
+            @Override
+            public void saveState() {
+                stamps[1] = System.currentTimeMillis();
+                store.put(r);
+            }
         };
         try {
             long total = TransferRecord.UPLOAD.equals(r.direction)
-                ? UploadAdapters.forProtocol(r.protocol, retries, backoffMillis).run(r.url, new File(r.path), r.headers, progress)
+                ? UploadAdapters.forProtocol(r.protocol, retries, backoffMillis).run(r, progress)
                 : new Downloader(retries, backoffMillis).run(r.url, new File(r.path), r.headers, progress);
             r.state = TransferRecord.FINISHED;
             r.bytes = total;
@@ -329,7 +354,7 @@ public final class Runner {
         return null;
     }
 
-    /** Removes a transfer's temporary files: a download's {@code .part}. An upload has none on Android. */
+    /** Removes a transfer's temporary files: a download's {@code .part}. An upload has none on Android (parts are read in place). */
     static void cleanUp(TransferRecord r) {
         if (TransferRecord.DOWNLOAD.equals(r.direction)) {
             Downloader.deleteQuietly(Downloader.partFile(new File(r.path)));

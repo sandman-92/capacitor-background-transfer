@@ -10,7 +10,19 @@ public enum Files {
     /// leaving no partial copy behind.
     @discardableResult
     public static func writeRemainder(of source: URL, from offset: Int64, to destination: URL, piece: Int = piece) throws -> Int64 {
+        try writeRange(of: source, from: offset, length: nil, to: destination, piece: piece)
+    }
+
+    /// Copies `length` bytes of `source` from `offset` (or all after it, when nil) into a new file at
+    /// `destination`, as `writeRemainder` does: a part or block of an upload in parts is sent from
+    /// such a copy. Throws if the file is too short.
+    @discardableResult
+    public static func writeRange(of source: URL, from offset: Int64, length: Int64?, to destination: URL, piece: Int = piece) throws -> Int64 {
         let size = try fileSize(source)
+        if let length = length, length < 0 || offset + length > size {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError,
+                          userInfo: [NSLocalizedDescriptionKey: "range \(offset)+\(length) outside a \(size)-byte file"])
+        }
         guard offset >= 0, offset <= size else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError,
                           userInfo: [NSLocalizedDescriptionKey: "offset \(offset) outside 0...\(size)"])
@@ -29,13 +41,18 @@ public enum Files {
             defer { try? output.close() }
             try input.seek(toOffset: UInt64(offset))
             var written: Int64 = 0
-            while true {
-                let data = try autoreleasepool { try input.read(upToCount: piece) ?? Data() }
+            while length.map({ written < $0 }) ?? true {
+                let want = length.map { Int(min(Int64(piece), $0 - written)) } ?? piece
+                let data = try autoreleasepool { try input.read(upToCount: want) ?? Data() }
                 if data.isEmpty { break }
                 try output.write(contentsOf: data)
                 written += Int64(data.count)
             }
             try output.synchronize()
+            if let length = length, written != length {
+                throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError,
+                              userInfo: [NSLocalizedDescriptionKey: "copied \(written) of \(length) bytes"])
+            }
             return written
         } catch {
             try? fm.removeItem(at: destination)
