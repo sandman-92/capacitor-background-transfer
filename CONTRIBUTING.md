@@ -114,7 +114,9 @@ published by a merge to `main`.
 2. On GitHub, draft a release from `main` with a new tag `vX.Y.Z` and the changelog entry as its
    notes. Tick **pre-release** for a version to try first: it is published under npm's `next`
    dist-tag, so `npm install capacitor-background-transfer@next` gets it and plain installs don't.
-   Untick it later, or publish the next version as a full release, for `latest`.
+   Unticking it later moves `latest` to that version (the workflow's promote job, which needs the
+   `NPM_TOKEN` secret: trusted publishing covers `npm publish` only), or publish the next version
+   as a full release.
 3. Publishing the release runs the workflow: it checks that the tag names the version in
    `package.json`, that `CHANGELOG.md` has a dated entry for it and that the tagged commit is on
    `main`; runs the lint, TypeScript, JUnit and XCTest suites and the iOS build (the server tests
@@ -135,7 +137,7 @@ The workflow signs in to npm one of two ways:
   on npmjs.com create a granular access token with read and write access to this package (or to
   new packages, the first time) and 2FA bypass for automation, and store it as the repository
   secret `NPM_TOKEN`. The workflow writes it to `.npmrc` for the publish only. Once the trusted
-  publisher is set up, delete the secret: with no `NPM_TOKEN` the workflow uses trusted
-  publishing.
+  publisher is set up the secret can go, and the workflow uses trusted publishing; keep it if you
+  want unticking pre-release on GitHub to promote a version to `latest`, which only a token can do.
 
 Provenance needs a public repository, which this is.
