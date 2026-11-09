@@ -1,0 +1,109 @@
+name: Release checks
+description: >-
+  Everything the release workflow checks before it publishes, shared by the publish job and the
+  manual dry run: the version and the changelog (and, for a release, the tag), lint, TypeScript,
+  Vitest, the build, JUnit, XCTest, the iOS build, a pinned npm and what the tarball will hold.
+  Runs after actions/checkout, on macOS (the iOS checks need Xcode).
+
+inputs:
+  mode:
+    description: >-
+      `release` (the tag is checked and must be given) or `dry-run` (no tag is checked, and none
+      may be given). Anything else fails.
+    required: true
+  tag:
+    description: >-
+      The release's tag, in release mode: it must be vX.Y.Z for the version in package.json and
+      its commit must be on main (which needs a checkout with fetch-depth 0).
+    required: false
+    default: ''
+  node-version:
+    description: Node.js version to set up.
+    required: true
+  java-version:
+    description: JDK version to set up (Zulu).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # No caches anywhere on the way to npm: a cache written by another workflow could change what
+    # gets published. Caching is off explicitly, so a later version of these actions that caches
+    # by default can't turn it back on unnoticed. setup-node v4 doesn't know
+    # package-manager-cache yet and warns about it; from v5 it stops the default cache.
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: ''
+        package-manager-cache: false
+    - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+      with:
+        distribution: zulu
+        java-version: ${{ inputs.java-version }}
+        cache: ''
+
+    - name: The version and the changelog (and the tag, for a release)
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -eu
+        case "$MODE" in
+          release)
+            if [ -z "$TAG" ]; then echo "::error::release mode needs the release's tag"; exit 1; fi ;;
+          dry-run)
+            if [ -n "$TAG" ]; then echo "::error::a dry run checks no tag, but was given $TAG"; exit 1; fi ;;
+          *) echo "::error::mode must be release or dry-run, not '$MODE'"; exit 1 ;;
+        esac
+        version="$(node -p "require('./package.json').version")"
+        entry="$(grep -m1 "^## $version" CHANGELOG.md || true)"
+        if [ -z "$entry" ]; then
+          echo "::error::CHANGELOG.md has no '## $version' entry"
+          exit 1
+        fi
+        case "$entry" in
+          *nreleased*) echo "::error::CHANGELOG.md still says '$entry': date the entry"; exit 1 ;;
+        esac
+        if [ "$MODE" = dry-run ]; then
+          echo "package.json says $version and CHANGELOG.md has '$entry'; a dry run checks no tag"
+          exit 0
+        fi
+        if [ "$TAG" != "v$version" ]; then
+          echo "::error::the release is tagged $TAG but package.json says $version"
+          exit 1
+        fi
+        if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+          echo "::error::the tagged commit $GITHUB_SHA is not on main"
+          exit 1
+        fi
+
+    # No install scripts: nothing in the build, the tests or the package needs one (the two
+    # dependencies that have them, fsevents and swiftlint, aren't used here), and a compromised
+    # dependency's script would otherwise run on the way to npm.
+    - shell: bash
+      run: npm ci --ignore-scripts
+    - name: Lint
+      shell: bash
+      run: npm run eslint && npm run prettier -- --check
+    - name: Typecheck, Vitest and build
+      shell: bash
+      run: npm run typecheck && npm test && npm run build
+    - name: Android unit tests
+      shell: bash
+      run: npm run test:android
+    - name: iOS core tests
+      shell: bash
+      run: npm run test:ios
+    - name: iOS build
+      shell: bash
+      run: npm run verify:ios
+
+    - name: npm that can publish with provenance and trusted publishing
+      shell: bash
+      # zizmor: ignore[adhoc-packages] npm itself can't come from the project's lockfile; the
+      # version is exact, and the Node 20 runner's own npm 10 can't use trusted publishing.
+      run: npm install -g npm@11.21.2 && npm --version
+    - name: What the package will hold
+      shell: bash
+      run: npm pack --dry-run
