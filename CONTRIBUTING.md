@@ -45,12 +45,19 @@ points at, with the reason beside it.
 
 Every `uses:` names an action by its full commit SHA, with the version in a comment
 (`actions/checkout@<sha> # v4.4.0`), so a moved tag can't change what runs. Dependabot keeps them
-current (`.github/dependabot.yml`): once a week, patch and minor bumps come together in one pull
-request, which CI merges itself once Verify and the server tests pass; each major bump comes on
-its own and waits for review. CI only merges a pull request Dependabot opened from a branch in
-this repository whose every commit Dependabot authored and GitHub signed, so one somebody else
-has pushed to stays open. The publish path restores no caches: caching is off explicitly on every
-setup action in `release.yml` and `.github/actions/release-checks`.
+current (`.github/dependabot.yml`): once a week, every actions update, majors included, comes in
+one pull request, a week after the release it offers. A person reviews and merges it: CI can't,
+because `GITHUB_TOKEN` may not merge a change to `.github/workflows/`, so CI's Dependabot merge
+leaves any pull request touching `.github/workflows/` or `.github/actions/` open with a notice.
+
+npm dependencies get Dependabot security updates only. CI merges their patch and minor ones once
+Verify, the server tests and the workflow checks pass; majors wait for review. It only merges a
+pull request Dependabot opened from a branch in this repository whose every commit Dependabot
+authored and GitHub signed, so one somebody else has pushed to stays open.
+
+The publish path restores no caches and runs no install scripts: caching is off explicitly on
+every setup action in `release.yml` and `.github/actions/release-checks`, and dependencies are
+installed with `npm ci --ignore-scripts`.
 
 ## The tests
 
@@ -169,8 +176,8 @@ The workflow signs in to npm one of two ways:
 - **Trusted publishing (no secret).** On npmjs.com, under the package's settings, add a trusted
   publisher: GitHub Actions, repository `sandman-92/capacitor-background-transfer`, workflow
   `release.yml`, no environment (so keep the workflow's file name). The publish job's
-  `id-token: write` permission lets npm verify the run, and no token is stored anywhere. npm only offers this for a package that already exists,
-  so the first release can't use it.
+  `id-token: write` permission lets npm verify the run, and no token is stored anywhere. npm only
+  offers this for a package that already exists, so the first release can't use it.
 - **A token (`NPM_TOKEN`).** For the first release (or if the trusted publisher is ever removed):
   on npmjs.com create a granular access token with read and write access to this package (or to
   new packages, the first time) and 2FA bypass for automation, and store it as the repository
