@@ -38,6 +38,7 @@ jobs:
         # actionlint knows.
         uses: ./.github/actions/release-checks # zizmor: ignore[self-repository]
         with:
+          mode: release
           tag: ${{ github.event.release.tag_name }}
           node-version: ${{ env.NODE_VERSION }}
           java-version: ${{ env.JAVA_VERSION }}
@@ -75,6 +76,7 @@ jobs:
         # actionlint knows.
         uses: ./.github/actions/release-checks # zizmor: ignore[self-repository]
         with:
+          mode: dry-run
           node-version: ${{ env.NODE_VERSION }}
           java-version: ${{ env.JAVA_VERSION }}
       - name: npm publish --dry-run

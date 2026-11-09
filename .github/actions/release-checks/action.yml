@@ -6,11 +6,15 @@ description: >-
   Runs after actions/checkout, on macOS (the iOS checks need Xcode).
 
 inputs:
+  mode:
+    description: >-
+      `release` (the tag is checked and must be given) or `dry-run` (no tag is checked, and none
+      may be given). Anything else fails.
+    required: true
   tag:
     description: >-
-      The release's tag. When set, it must be vX.Y.Z for the version in package.json and its
-      commit must be on main (which needs a checkout with fetch-depth 0). Empty for a dry run,
-      which checks no tag.
+      The release's tag, in release mode: it must be vX.Y.Z for the version in package.json and
+      its commit must be on main (which needs a checkout with fetch-depth 0).
     required: false
     default: ''
   node-version:
@@ -41,9 +45,17 @@ runs:
     - name: The version and the changelog (and the tag, for a release)
       shell: bash
       env:
+        MODE: ${{ inputs.mode }}
         TAG: ${{ inputs.tag }}
       run: |
         set -eu
+        case "$MODE" in
+          release)
+            if [ -z "$TAG" ]; then echo "::error::release mode needs the release's tag"; exit 1; fi ;;
+          dry-run)
+            if [ -n "$TAG" ]; then echo "::error::a dry run checks no tag, but was given $TAG"; exit 1; fi ;;
+          *) echo "::error::mode must be release or dry-run, not '$MODE'"; exit 1 ;;
+        esac
         version="$(node -p "require('./package.json').version")"
         entry="$(grep -m1 "^## $version" CHANGELOG.md || true)"
         if [ -z "$entry" ]; then
@@ -53,8 +65,8 @@ runs:
         case "$entry" in
           *nreleased*) echo "::error::CHANGELOG.md still says '$entry': date the entry"; exit 1 ;;
         esac
-        if [ -z "$TAG" ]; then
-          echo "package.json says $version and CHANGELOG.md has '$entry'; no tag to check"
+        if [ "$MODE" = dry-run ]; then
+          echo "package.json says $version and CHANGELOG.md has '$entry'; a dry run checks no tag"
           exit 0
         fi
         if [ "$TAG" != "v$version" ]; then
@@ -66,8 +78,11 @@ runs:
           exit 1
         fi
 
+    # No install scripts: nothing in the build, the tests or the package needs one (the two
+    # dependencies that have them, fsevents and swiftlint, aren't used here), and a compromised
+    # dependency's script would otherwise run on the way to npm.
     - shell: bash
-      run: npm ci
+      run: npm ci --ignore-scripts
     - name: Lint
       shell: bash
       run: npm run eslint && npm run prettier -- --check
