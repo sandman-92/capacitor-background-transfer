@@ -151,11 +151,14 @@ jobs:
 
   dependabot-merge:
     name: Merge Dependabot update
-    needs: [verify, servers-jvm]
-    # Patch and minor updates merge once Verify and the server tests pass. Major updates stay open
-    # for review, and so does any pull request that isn't purely Dependabot's own: it must be opened
-    # by Dependabot, from a branch in this repository, and every commit on it authored by Dependabot
-    # and signed by GitHub. Who triggered the run (github.actor) isn't checked: it can be spoofed.
+    needs: [verify, servers-jvm, workflows]
+    # Patch and minor npm security updates merge once Verify, the server tests and the workflow
+    # checks pass. Major updates stay open for review, and so does any pull request that isn't
+    # purely Dependabot's own: it must be opened by Dependabot, from a branch in this repository,
+    # and every commit on it authored by Dependabot and signed by GitHub. Who triggered the run
+    # (github.actor) isn't checked: it can be spoofed. A pull request that touches
+    # .github/workflows/ or .github/actions/ (every actions update does) stays open for a person to
+    # merge: GITHUB_TOKEN can't be given the workflows permission a merge of it needs.
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
@@ -193,14 +196,33 @@ jobs:
             own=false
           fi
           echo "dependabot-only=$own" >> "$GITHUB_OUTPUT"
-      - id: metadata
+      - name: Nothing a person has to merge
+        id: files
         if: steps.commits.outputs.dependabot-only == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')"
+          workflow_files="$(grep -E '^\.github/(workflows|actions)/' <<< "$files" || true)"
+          if [ -n "$workflow_files" ]; then
+            echo "::notice::this pull request changes the workflows, which GITHUB_TOKEN can't merge: a person must review and merge it ($(tr '\n' ' ' <<< "$workflow_files"))"
+            echo "needs-person=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no file under .github/workflows/ or .github/actions/"
+            echo "needs-person=false" >> "$GITHUB_OUTPUT"
+          fi
+      - id: metadata
+        if: steps.commits.outputs.dependabot-only == 'true' && steps.files.outputs.needs-person == 'false'
         uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2.5.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       # --match-head-commit: if anything is pushed after the check above, GitHub refuses the merge.
       - if: >-
           steps.commits.outputs.dependabot-only == 'true' &&
+          steps.files.outputs.needs-person == 'false' &&
           (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
           steps.metadata.outputs.update-type == 'version-update:semver-minor')
         run: gh pr merge "$PR_URL" --merge --match-head-commit "$HEAD_SHA"

@@ -1,9 +1,10 @@
 # Keeps the actions the workflows use current. They are pinned to commit SHAs (with the version in
-# a comment), so nothing moves unless one of these pull requests is merged. Patch and minor bumps
-# come together in one weekly pull request, which CI merges once it passes; each major bump comes
-# on its own and waits for review. npm dependencies get security updates only (repository
-# settings), not version updates. A new release waits a week before it's offered, so a hijacked
-# release is likelier to be caught and pulled first.
+# a comment), so nothing moves unless one of these pull requests is merged. Every actions update,
+# majors included, comes in one weekly pull request. A person reviews and merges it: CI's
+# Dependabot merge can't, because GITHUB_TOKEN may not merge changes to the workflows. A new
+# release waits a week before it's offered, so a hijacked release is likelier to be caught and
+# pulled first. npm dependencies get security updates only (repository settings), not version
+# updates; their patch and minor ones merge themselves once CI passes.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -18,6 +19,3 @@ updates:
       actions:
         patterns:
           - '*'
-        update-types:
-          - minor
-          - patch
