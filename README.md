@@ -2,14 +2,15 @@
 
 **Uploads and downloads that keep going when your Capacitor app doesn't.**
 
+[![npm](https://img.shields.io/npm/v/capacitor-background-transfer.svg)](https://www.npmjs.com/package/capacitor-background-transfer)
 [![CI](https://github.com/sandman-92/capacitor-background-transfer/actions/workflows/ci.yml/badge.svg)](https://github.com/sandman-92/capacitor-background-transfer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Capacitor 7](https://img.shields.io/badge/Capacitor-7-119eff.svg)
 ![Android 6+](https://img.shields.io/badge/Android-6.0%2B-3ddc84.svg)
 ![iOS 15+](https://img.shields.io/badge/iOS-15%2B-lightgrey.svg)
 
-[Install](#install) · [Quick start](#quick-start) · [Upload protocols](docs/upload-protocols.md) ·
-[How it works](docs/how-it-works.md) · [API](#api) · [Changelog](CHANGELOG.md)
+[Install](#install) · [npm](https://www.npmjs.com/package/capacitor-background-transfer) ·
+[Quick start](#quick-start) · [Upload protocols](docs/upload-protocols.md) · [How it works](docs/how-it-works.md) · [API](#api) · [Changelog](CHANGELOG.md)
 
 A phone suspends an app soon after it leaves the screen, and an upload made with `fetch` or XHR
 from the web view is suspended with it. For a large file on a mobile network, the user has to keep
@@ -49,6 +50,9 @@ battery managers haven't been tested yet (see [what's checked](docs/upload-proto
 Reports from real apps are very welcome.
 
 ## Install
+
+The plugin is published on npm as
+[`capacitor-background-transfer`](https://www.npmjs.com/package/capacitor-background-transfer).
 
 ```bash
 npm install capacitor-background-transfer
